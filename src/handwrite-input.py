@@ -58,6 +58,8 @@ class HandwriteOverlay:
         self.window.set_default_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         self.window.set_accept_focus(False)
         self.window.set_focus_on_map(False)
+        self.window.set_type_hint(Gdk.WindowTypeHint.SPLASHSCREEN)
+        self.window.set_override_redirect(True)
 
         # Try to make it transparent
         screen = self.window.get_screen()
@@ -81,7 +83,9 @@ class HandwriteOverlay:
         self.drawing_area.set_events(
             Gdk.EventMask.POINTER_MOTION_MASK |
             Gdk.EventMask.BUTTON_PRESS_MASK |
-            Gdk.EventMask.BUTTON_RELEASE_MASK
+            Gdk.EventMask.BUTTON_RELEASE_MASK |
+            Gdk.EventMask.TABLET_STYLUS_MASK |
+            Gdk.EventMask.TABLET_PAD_MASK
         )
 
         # Layout
@@ -108,6 +112,8 @@ class HandwriteOverlay:
         self.window.add(vbox)
         self.window.connect('delete-event', lambda w, e: self.hide())
         self.window.show_all()
+        self.window.present()
+        self.window.grab_focus()
 
     def hide(self):
         if self.window is not None:
@@ -135,7 +141,7 @@ class HandwriteOverlay:
         if device is None:
             return False
         source = device.get_source()
-        if source == Gdk.InputSource.PEN:
+        if source in (Gdk.InputSource.PEN, Gdk.InputSource.ERASER, Gdk.InputSource.MOUSE):
             self.is_drawing = True
             self.current_stroke = [(event.x, event.y, 1.0)]
             return True
@@ -156,7 +162,7 @@ class HandwriteOverlay:
         if device is None:
             return False
         source = device.get_source()
-        if source != Gdk.InputSource.PEN:
+        if source not in (Gdk.InputSource.PEN, Gdk.InputSource.ERASER, Gdk.InputSource.MOUSE):
             return False
 
         pressure = event.get_axis(Gdk.AxisUse.PRESSURE)
