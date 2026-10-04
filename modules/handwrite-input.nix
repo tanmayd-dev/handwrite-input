@@ -9,7 +9,7 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.handwrite-input;
+      default = null;
       defaultText = lib.literalExpression "pkgs.handwrite-input";
       description = "The handwrite-input package to use.";
     };
