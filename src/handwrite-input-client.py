@@ -13,7 +13,7 @@ SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
 def main():
     if len(sys.argv) < 2:
         print("Usage: handwrite-input-client <command>")
-        print("Commands: toggle, show, hide, clear, quit")
+        print("Commands: toggle, show, hide, clear, force_reset, quit")
         sys.exit(1)
 
     command = sys.argv[1]

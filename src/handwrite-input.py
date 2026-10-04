@@ -49,6 +49,7 @@ class HandwriteOverlay:
 
     def show(self):
         if self.window is not None:
+            self.force_reset()
             self.window.show_all()
             return
 
@@ -126,6 +127,18 @@ class HandwriteOverlay:
     def clear(self):
         self.strokes = []
         self.current_stroke = []
+        self.is_drawing = False
+        self.context.set_source_rgba(0, 0, 0, 0)
+        self.context.paint()
+        self.drawing_area.queue_draw()
+
+    def force_reset(self):
+        self.strokes = []
+        self.current_stroke = []
+        self.is_drawing = False
+        if self.debounce_id is not None:
+            GLib.source_remove(self.debounce_id)
+            self.debounce_id = None
         self.context.set_source_rgba(0, 0, 0, 0)
         self.context.paint()
         self.drawing_area.queue_draw()
@@ -141,6 +154,8 @@ class HandwriteOverlay:
             cr.paint()
 
     def on_button_press(self, widget, event):
+        if event.button != 1:
+            return False
         device = event.get_source_device()
         if device is None:
             return False
@@ -152,6 +167,8 @@ class HandwriteOverlay:
         return False
 
     def on_button_release(self, widget, event):
+        if event.button != 1:
+            return False
         if self.is_drawing and self.current_stroke:
             self.strokes.append(self.current_stroke)
             self.current_stroke = []
@@ -254,6 +271,8 @@ class HandwriteDaemon:
                 self.hide()
             elif data == 'clear':
                 self.overlay.clear()
+            elif data == 'force_reset':
+                self.overlay.force_reset()
             elif data == 'quit':
                 self.cleanup()
                 Gtk.main_quit()
