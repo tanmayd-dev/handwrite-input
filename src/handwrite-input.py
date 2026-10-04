@@ -5,6 +5,8 @@ Handwrite Input — system-wide handwriting recognition for Wayland.
 A daemon that shows a transparent overlay where you can write with a pen.
 After a debounce period, the handwriting is recognized via Tesseract OCR
 and typed into the focused application via wtype.
+
+Uses gtk-layer-shell for proper Hyprland overlay support.
 """
 
 import os
@@ -18,7 +20,8 @@ from pathlib import Path
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gtk, Gdk, GLib
+gi.require_version('GtkLayerShell', '0.1')
+from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
 
@@ -51,15 +54,22 @@ class HandwriteOverlay:
 
         self.window = Gtk.Window()
         self.window.set_decorated(False)
-        self.window.set_keep_above(True)
-        self.window.set_skip_taskbar_hint(True)
-        self.window.set_skip_pager_hint(True)
-        self.window.set_position(Gtk.WindowPosition.CENTER)
         self.window.set_default_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         self.window.set_accept_focus(False)
         self.window.set_focus_on_map(False)
-        self.window.set_type_hint(Gdk.WindowTypeHint.SPLASHSCREEN)
-        self.window.set_override_redirect(True)
+
+        # Initialize as a layer shell surface (proper Hyprland overlay)
+        GtkLayerShell.init_for_window(self.window)
+        GtkLayerShell.set_layer(self.window, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_exclusive_zone(self.window, -1)
+        GtkLayerShell.set_anchor(self.window, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_anchor(self.window, GtkLayerShell.Edge.BOTTOM, True)
+        GtkLayerShell.set_anchor(self.window, GtkLayerShell.Edge.LEFT, True)
+        GtkLayerShell.set_anchor(self.window, GtkLayerShell.Edge.RIGHT, True)
+        GtkLayerShell.set_margin(self.window, GtkLayerShell.Edge.TOP, 50)
+        GtkLayerShell.set_margin(self.window, GtkLayerShell.Edge.BOTTOM, 50)
+        GtkLayerShell.set_margin(self.window, GtkLayerShell.Edge.LEFT, 50)
+        GtkLayerShell.set_margin(self.window, GtkLayerShell.Edge.RIGHT, 50)
 
         # Try to make it transparent
         screen = self.window.get_screen()
@@ -83,9 +93,7 @@ class HandwriteOverlay:
         self.drawing_area.set_events(
             Gdk.EventMask.POINTER_MOTION_MASK |
             Gdk.EventMask.BUTTON_PRESS_MASK |
-            Gdk.EventMask.BUTTON_RELEASE_MASK |
-            Gdk.EventMask.TABLET_STYLUS_MASK |
-            Gdk.EventMask.TABLET_PAD_MASK
+            Gdk.EventMask.BUTTON_RELEASE_MASK
         )
 
         # Layout
@@ -112,8 +120,6 @@ class HandwriteOverlay:
         self.window.add(vbox)
         self.window.connect('delete-event', lambda w, e: self.hide())
         self.window.show_all()
-        self.window.present()
-        self.window.grab_focus()
 
     def hide(self):
         if self.window is not None:

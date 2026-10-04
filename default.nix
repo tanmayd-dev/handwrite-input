@@ -18,6 +18,7 @@ let
     pkgs.at-spi2-atk
     pkgs.at-spi2-core
     pkgs.gsettings-desktop-schemas
+    pkgs.gtk-layer-shell
     pkgs.libx11
     pkgs.libxext
     pkgs.libxrandr
