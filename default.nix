@@ -7,6 +7,7 @@ let
     pillow
     transformers
     torch
+    sentencepiece
   ]);
   typelibPath = pkgs.lib.makeSearchPath "lib/girepository-1.0" [
     pkgs.gtk3
