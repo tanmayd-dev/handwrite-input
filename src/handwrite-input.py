@@ -139,6 +139,7 @@ class HandwriteOverlay:
         self.drawing_area.queue_draw()
 
     def finish(self):
+        print(f"[DEBUG] finish() called, {len(self.strokes)} strokes", file=sys.stderr)
         self.daemon.recognize()
         self.clear()
         self.hide()
@@ -149,6 +150,7 @@ class HandwriteOverlay:
             self.context = cairo.Context(self.surface)
             self.context.set_source_rgba(0, 0, 0, 0)
             self.context.paint()
+            print(f"[DEBUG] Surface created: {allocation.width}x{allocation.height}", file=sys.stderr)
 
     def on_draw(self, widget, cr):
         if self.surface:
@@ -165,6 +167,7 @@ class HandwriteOverlay:
         if source in (Gdk.InputSource.PEN, Gdk.InputSource.ERASER, Gdk.InputSource.MOUSE):
             self.is_drawing = True
             self.current_stroke = [(event.x, event.y, 1.0)]
+            print(f"[DEBUG] Button press: {len(self.current_stroke)} points", file=sys.stderr)
             return True
         return False
 
@@ -175,6 +178,7 @@ class HandwriteOverlay:
             self.strokes.append(self.current_stroke)
             self.current_stroke = []
             self.is_drawing = False
+            print(f"[DEBUG] Button release: {len(self.strokes)} strokes, scheduling recognize", file=sys.stderr)
             self.schedule_recognize()
         return True
 
@@ -193,6 +197,8 @@ class HandwriteOverlay:
             pressure = 1.0
 
         self.current_stroke.append((event.x, event.y, pressure))
+        if len(self.current_stroke) <= 3:
+            print(f"[DEBUG] Motion: ({event.x:.0f}, {event.y:.0f}) pressure={pressure:.2f}, stroke len={len(self.current_stroke)}", file=sys.stderr)
         self.draw_last_segment()
         return True
 
@@ -220,6 +226,7 @@ class HandwriteOverlay:
 
     def on_debounce(self):
         self.debounce_id = None
+        print(f"[DEBUG] Debounce fired, {len(self.strokes)} strokes", file=sys.stderr)
         self.daemon.recognize()
         return False
 
@@ -299,15 +306,19 @@ class HandwriteDaemon:
         self.visible = False
 
     def recognize(self):
+        print(f"[DEBUG] recognize() called, {len(self.overlay.strokes)} strokes", file=sys.stderr)
         if not self.overlay.strokes:
+            print("[DEBUG] No strokes, returning", file=sys.stderr)
             return
         if self.overlay.surface is None:
+            print("[DEBUG] Surface is None, returning", file=sys.stderr)
             return
 
         # Save surface to PNG
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
             self.overlay.surface.write_to_png(f.name)
             png_path = f.name
+            print(f"[DEBUG] Saved PNG to {png_path}", file=sys.stderr)
 
         try:
             # Run tesseract
@@ -316,10 +327,12 @@ class HandwriteDaemon:
                 capture_output=True, text=True, timeout=10
             )
             text = result.stdout.strip()
+            print(f"[DEBUG] Tesseract output: '{text}'", file=sys.stderr)
 
             if text:
                 # Type via wtype
                 subprocess.run(['wtype', text], timeout=5)
+                print(f"[DEBUG] Typed via wtype", file=sys.stderr)
         except Exception as e:
             print(f"Recognition error: {e}", file=sys.stderr)
         finally:
