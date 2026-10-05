@@ -5,6 +5,7 @@ let
     pygobject3
     pycairo
     pillow
+    easyocr
   ]);
   typelibPath = pkgs.lib.makeSearchPath "lib/girepository-1.0" [
     pkgs.gtk3
@@ -46,7 +47,7 @@ pkgs.runCommand "handwrite-input-0.1.0" {
   # Main daemon
   makeWrapper ${pythonEnv}/bin/python $out/bin/handwrite-input \
     --add-flags "$src/handwrite-input.py" \
-    --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.tesseract pkgs.wtype ]}" \
+    --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.wtype ]}" \
     --set GI_TYPELIB_PATH "${typelibPath}"
 
   # Client

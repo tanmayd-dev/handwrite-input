@@ -3,7 +3,7 @@
 Handwrite Input — system-wide handwriting recognition for Wayland.
 
 A daemon that shows a transparent overlay where you can write with a pen.
-After a debounce period, the handwriting is recognized via Tesseract OCR
+After a debounce period, the handwriting is recognized via EasyOCR
 and typed into the focused application via wtype.
 
 Uses gtk-layer-shell for proper Hyprland overlay support.
@@ -24,13 +24,16 @@ gi.require_version('GtkLayerShell', '0.1')
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
+import easyocr
+import numpy as np
+from PIL import Image
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
 
 DEFAULT_DEBOUNCE_MS = 1500
 DEFAULT_LANGUAGE = 'eng'
-LINE_WIDTH = 8.0
+LINE_WIDTH = 15.0
 
 
 class HandwriteOverlay:
@@ -316,8 +319,8 @@ class HandwriteDaemon:
         if width < 10 or height < 10:
             return
 
-        # Scale up 2x for better OCR
-        scale = 2
+        # Scale up 3x for better OCR
+        scale = 3
         scaled_width = width * scale
         scaled_height = height * scale
 
@@ -351,12 +354,10 @@ class HandwriteDaemon:
             png_path = f.name
 
         try:
-            # Run tesseract
-            result = subprocess.run(
-                ['tesseract', png_path, 'stdout', '-l', DEFAULT_LANGUAGE, '--psm', '7'],
-                capture_output=True, text=True, timeout=10
-            )
-            text = result.stdout.strip()
+            # Run EasyOCR
+            reader = easyocr.Reader([DEFAULT_LANGUAGE], gpu=False)
+            result = reader.readtext(png_path, detail=0, paragraph=True)
+            text = ' '.join(result).strip()
 
             if text:
                 # Type via wtype
