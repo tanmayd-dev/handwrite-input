@@ -25,7 +25,7 @@ from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
 from PIL import Image
-from transformers import AutoTokenizer, AutoImageProcessor, VisionEncoderDecoderModel
+from transformers import RobertaTokenizer, ViTImageProcessor, VisionEncoderDecoderModel
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
@@ -220,6 +220,24 @@ class HandwriteDaemon:
         self.overlay = HandwriteOverlay(self)
         self.sock = None
         self.visible = False
+        self._trocr = None
+
+    def _load_trocr(self):
+        if self._trocr is None:
+            # Slow Roberta tokenizer — AutoTokenizer in transformers 5.x tries
+            # (and fails) to convert this to a fast tokenizer.
+            tokenizer = RobertaTokenizer.from_pretrained(
+                'microsoft/trocr-large-handwritten'
+            )
+            image_processor = ViTImageProcessor.from_pretrained(
+                'microsoft/trocr-large-handwritten'
+            )
+            model = VisionEncoderDecoderModel.from_pretrained(
+                'microsoft/trocr-large-handwritten'
+            )
+            model.eval()
+            self._trocr = (tokenizer, image_processor, model)
+        return self._trocr
 
     def start(self):
         # Clean up old socket
@@ -357,11 +375,7 @@ class HandwriteDaemon:
         surface.write_to_png(debug_path)
 
         try:
-            # Run TrOCR (transformer-based OCR trained on handwriting)
-            tokenizer = AutoTokenizer.from_pretrained('microsoft/trocr-large-handwritten', use_fast=False)
-            image_processor = AutoImageProcessor.from_pretrained('microsoft/trocr-large-handwritten')
-            model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-handwritten')
-
+            tokenizer, image_processor, model = self._load_trocr()
             image = Image.open(png_path).convert('RGB')
             pixel_values = image_processor(images=image, return_tensors='pt').pixel_values
             generated_ids = model.generate(pixel_values)
