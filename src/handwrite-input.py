@@ -24,9 +24,8 @@ gi.require_version('GtkLayerShell', '0.1')
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
-import easyocr
-import numpy as np
 from PIL import Image
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
@@ -358,12 +357,14 @@ class HandwriteDaemon:
         surface.write_to_png(debug_path)
 
         try:
-            # Run EasyOCR with detail to see confidence
-            reader = easyocr.Reader([DEFAULT_LANGUAGE], gpu=False)
-            result = reader.readtext(png_path, detail=1, paragraph=False)
-            text = ' '.join([r[1] for r in result]).strip()
-            confidences = [r[2] for r in result]
-            print(f"EasyOCR result: '{text}' (confidences: {confidences})", file=sys.stderr)
+            # Run TrOCR (transformer-based OCR trained on handwriting)
+            processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-handwritten')
+            model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-handwritten')
+
+            image = Image.open(png_path).convert('RGB')
+            pixel_values = processor(images=image, return_tensors='pt').pixel_values
+            generated_ids = model.generate(pixel_values)
+            text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             if text:
                 # Type via wtype
