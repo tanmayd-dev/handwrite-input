@@ -55,7 +55,6 @@ class HandwriteOverlay:
 
         self.window = Gtk.Window()
         self.window.set_decorated(False)
-        self.window.set_default_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         # Initialize as a layer shell surface (proper Hyprland overlay)
         GtkLayerShell.init_for_window(self.window)
         GtkLayerShell.set_layer(self.window, GtkLayerShell.Layer.OVERLAY)
@@ -76,19 +75,13 @@ class HandwriteOverlay:
         if visual and screen.is_composited():
             self.window.set_visual(visual)
 
-        # Create drawing surface
-        self.surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        self.context = cairo.Context(self.surface)
-        self.context.set_source_rgba(0, 0, 0, 0)
-        self.context.paint()
-
-        # Drawing area
+        # Drawing area — fills the entire window
         self.drawing_area = Gtk.DrawingArea()
-        self.drawing_area.set_size_request(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         self.drawing_area.connect('draw', self.on_draw)
         self.drawing_area.connect('motion-notify-event', self.on_motion)
         self.drawing_area.connect('button-press-event', self.on_button_press)
         self.drawing_area.connect('button-release-event', self.on_button_release)
+        self.drawing_area.connect('size-allocate', self.on_size_allocate)
         self.drawing_area.set_events(
             Gdk.EventMask.POINTER_MOTION_MASK |
             Gdk.EventMask.BUTTON_PRESS_MASK |
@@ -128,8 +121,9 @@ class HandwriteOverlay:
         self.strokes = []
         self.current_stroke = []
         self.is_drawing = False
-        self.context.set_source_rgba(0, 0, 0, 0)
-        self.context.paint()
+        if self.context is not None:
+            self.context.set_source_rgba(0, 0, 0, 0)
+            self.context.paint()
         self.drawing_area.queue_draw()
 
     def force_reset(self):
@@ -139,14 +133,22 @@ class HandwriteOverlay:
         if self.debounce_id is not None:
             GLib.source_remove(self.debounce_id)
             self.debounce_id = None
-        self.context.set_source_rgba(0, 0, 0, 0)
-        self.context.paint()
+        if self.context is not None:
+            self.context.set_source_rgba(0, 0, 0, 0)
+            self.context.paint()
         self.drawing_area.queue_draw()
 
     def finish(self):
         self.daemon.recognize()
         self.clear()
         self.hide()
+
+    def on_size_allocate(self, widget, allocation):
+        if self.surface is None or self.surface.get_width() != allocation.width or self.surface.get_height() != allocation.height:
+            self.surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, allocation.width, allocation.height)
+            self.context = cairo.Context(self.surface)
+            self.context.set_source_rgba(0, 0, 0, 0)
+            self.context.paint()
 
     def on_draw(self, widget, cr):
         if self.surface:
@@ -195,6 +197,8 @@ class HandwriteOverlay:
         return True
 
     def draw_last_segment(self):
+        if self.context is None:
+            return
         if len(self.current_stroke) < 2:
             return
         x0, y0, p0 = self.current_stroke[-2]
@@ -296,6 +300,8 @@ class HandwriteDaemon:
 
     def recognize(self):
         if not self.overlay.strokes:
+            return
+        if self.overlay.surface is None:
             return
 
         # Save surface to PNG
