@@ -122,7 +122,7 @@ class HandwriteOverlay:
         self.current_stroke = []
         self.is_drawing = False
         if self.context is not None:
-            self.context.set_source_rgba(0, 0, 0, 0)
+            self.context.set_source_rgba(1, 1, 1, 1)
             self.context.paint()
         self.drawing_area.queue_draw()
 
@@ -134,7 +134,7 @@ class HandwriteOverlay:
             GLib.source_remove(self.debounce_id)
             self.debounce_id = None
         if self.context is not None:
-            self.context.set_source_rgba(0, 0, 0, 0)
+            self.context.set_source_rgba(1, 1, 1, 1)
             self.context.paint()
         self.drawing_area.queue_draw()
 
@@ -147,7 +147,7 @@ class HandwriteOverlay:
         if self.surface is None or self.surface.get_width() != allocation.width or self.surface.get_height() != allocation.height:
             self.surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, allocation.width, allocation.height)
             self.context = cairo.Context(self.surface)
-            self.context.set_source_rgba(0, 0, 0, 0)
+            self.context.set_source_rgba(1, 1, 1, 1)
             self.context.paint()
 
     def on_draw(self, widget, cr):
@@ -204,7 +204,7 @@ class HandwriteOverlay:
         x0, y0, p0 = self.current_stroke[-2]
         x1, y1, p1 = self.current_stroke[-1]
 
-        self.context.set_source_rgba(1, 1, 1, 0.8)
+        self.context.set_source_rgba(0, 0, 0, 0.8)
         self.context.set_line_width(3.0)
         self.context.set_line_cap(cairo.LINE_CAP_ROUND)
         self.context.move_to(x0, y0)
