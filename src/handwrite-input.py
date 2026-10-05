@@ -32,7 +32,7 @@ SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
 
 DEFAULT_DEBOUNCE_MS = 1500
-DEFAULT_LANGUAGE = 'eng'
+DEFAULT_LANGUAGE = 'en'
 LINE_WIDTH = 15.0
 
 
