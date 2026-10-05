@@ -353,11 +353,17 @@ class HandwriteDaemon:
             surface.write_to_png(f.name)
             png_path = f.name
 
+        # Save debug copy
+        debug_path = '/tmp/handwrite-debug.png'
+        surface.write_to_png(debug_path)
+
         try:
-            # Run EasyOCR
+            # Run EasyOCR with detail to see confidence
             reader = easyocr.Reader([DEFAULT_LANGUAGE], gpu=False)
-            result = reader.readtext(png_path, detail=0, paragraph=True)
-            text = ' '.join(result).strip()
+            result = reader.readtext(png_path, detail=1, paragraph=False)
+            text = ' '.join([r[1] for r in result]).strip()
+            confidences = [r[2] for r in result]
+            print(f"EasyOCR result: '{text}' (confidences: {confidences})", file=sys.stderr)
 
             if text:
                 # Type via wtype
