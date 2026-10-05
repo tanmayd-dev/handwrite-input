@@ -25,7 +25,7 @@ from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
 from PIL import Image
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+from transformers import AutoProcessor, VisionEncoderDecoderModel
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
@@ -358,7 +358,7 @@ class HandwriteDaemon:
 
         try:
             # Run TrOCR (transformer-based OCR trained on handwriting)
-            processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-handwritten', use_fast=False)
+            processor = AutoProcessor.from_pretrained('microsoft/trocr-large-handwritten')
             model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-handwritten')
 
             image = Image.open(png_path).convert('RGB')
