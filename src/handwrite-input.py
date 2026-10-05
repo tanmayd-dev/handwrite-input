@@ -25,7 +25,7 @@ from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
 from PIL import Image
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoImageProcessor, VisionEncoderDecoderModel
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
@@ -357,10 +357,15 @@ class HandwriteDaemon:
         surface.write_to_png(debug_path)
 
         try:
-            # Run TrOCR via pipeline (handles tokenizer loading internally)
-            ocr = pipeline("image-to-text", model="microsoft/trocr-large-handwritten")
-            result = ocr(png_path)
-            text = result[0]['generated_text'].strip()
+            # Run TrOCR (transformer-based OCR trained on handwriting)
+            tokenizer = AutoTokenizer.from_pretrained('microsoft/trocr-large-handwritten', use_fast=False)
+            image_processor = AutoImageProcessor.from_pretrained('microsoft/trocr-large-handwritten')
+            model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-handwritten')
+
+            image = Image.open(png_path).convert('RGB')
+            pixel_values = image_processor(images=image, return_tensors='pt').pixel_values
+            generated_ids = model.generate(pixel_values)
+            text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             if text:
                 # Type via wtype
