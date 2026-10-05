@@ -205,7 +205,7 @@ class HandwriteOverlay:
         x1, y1, p1 = self.current_stroke[-1]
 
         self.context.set_source_rgba(0, 0, 0, 0.8)
-        self.context.set_line_width(3.0)
+        self.context.set_line_width(8.0)
         self.context.set_line_cap(cairo.LINE_CAP_ROUND)
         self.context.move_to(x0, y0)
         self.context.line_to(x1, y1)
@@ -304,15 +304,54 @@ class HandwriteDaemon:
         if self.overlay.surface is None:
             return
 
-        # Save surface to PNG
+        # Calculate bounding box of all strokes
+        all_points = []
+        for stroke in self.overlay.strokes:
+            all_points.extend([(p[0], p[1]) for p in stroke])
+
+        if not all_points:
+            return
+
+        min_x = min(p[0] for p in all_points)
+        min_y = min(p[1] for p in all_points)
+        max_x = max(p[0] for p in all_points)
+        max_y = max(p[1] for p in all_points)
+
+        # Add padding
+        padding = 40
+        min_x = max(0, min_x - padding)
+        min_y = max(0, min_y - padding)
+        max_x = min(self.overlay.surface.get_width(), max_x + padding)
+        max_y = min(self.overlay.surface.get_height(), max_y + padding)
+
+        width = int(max_x - min_x)
+        height = int(max_y - min_y)
+
+        if width < 10 or height < 10:
+            return
+
+        # Create cropped surface
+        cropped = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+        cropped_ctx = cairo.Context(cropped)
+        cropped_ctx.set_source_surface(self.overlay.surface, -min_x, -min_y)
+        cropped_ctx.paint()
+
+        # Scale up 2x for better OCR
+        scaled = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * 2, height * 2)
+        scaled_ctx = cairo.Context(scaled)
+        scaled_ctx.scale(2, 2)
+        scaled_ctx.set_source_surface(cropped, 0, 0)
+        scaled_ctx.paint()
+
+        # Save to PNG
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-            self.overlay.surface.write_to_png(f.name)
+            scaled.write_to_png(f.name)
             png_path = f.name
 
         try:
-            # Run tesseract
+            # Run tesseract with PSM 7 (single text line) and LSTM engine
             result = subprocess.run(
-                ['tesseract', png_path, 'stdout', '-l', DEFAULT_LANGUAGE],
+                ['tesseract', png_path, 'stdout', '-l', DEFAULT_LANGUAGE, '--psm', '7', '--oem', '1'],
                 capture_output=True, text=True, timeout=10
             )
             text = result.stdout.strip()
