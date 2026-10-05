@@ -358,7 +358,7 @@ class HandwriteDaemon:
 
         try:
             # Run TrOCR (transformer-based OCR trained on handwriting)
-            processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-handwritten')
+            processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-handwritten', use_fast=False)
             model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-handwritten')
 
             image = Image.open(png_path).convert('RGB')

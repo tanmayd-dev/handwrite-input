@@ -8,6 +8,7 @@ let
     transformers
     torch
     sentencepiece
+    tiktoken
   ]);
   typelibPath = pkgs.lib.makeSearchPath "lib/girepository-1.0" [
     pkgs.gtk3
