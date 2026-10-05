@@ -28,10 +28,9 @@ import cairo
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
 
-DEFAULT_WIDTH = 600
-DEFAULT_HEIGHT = 300
 DEFAULT_DEBOUNCE_MS = 1500
 DEFAULT_LANGUAGE = 'eng'
+LINE_WIDTH = 8.0
 
 
 class HandwriteOverlay:
@@ -40,8 +39,6 @@ class HandwriteOverlay:
     def __init__(self, daemon):
         self.daemon = daemon
         self.window = None
-        self.surface = None
-        self.context = None
         self.strokes = []
         self.current_stroke = []
         self.is_drawing = False
@@ -55,6 +52,7 @@ class HandwriteOverlay:
 
         self.window = Gtk.Window()
         self.window.set_decorated(False)
+
         # Initialize as a layer shell surface (proper Hyprland overlay)
         GtkLayerShell.init_for_window(self.window)
         GtkLayerShell.set_layer(self.window, GtkLayerShell.Layer.OVERLAY)
@@ -81,7 +79,6 @@ class HandwriteOverlay:
         self.drawing_area.connect('motion-notify-event', self.on_motion)
         self.drawing_area.connect('button-press-event', self.on_button_press)
         self.drawing_area.connect('button-release-event', self.on_button_release)
-        self.drawing_area.connect('size-allocate', self.on_size_allocate)
         self.drawing_area.set_events(
             Gdk.EventMask.POINTER_MOTION_MASK |
             Gdk.EventMask.BUTTON_PRESS_MASK |
@@ -121,9 +118,6 @@ class HandwriteOverlay:
         self.strokes = []
         self.current_stroke = []
         self.is_drawing = False
-        if self.context is not None:
-            self.context.set_source_rgba(1, 1, 1, 1)
-            self.context.paint()
         self.drawing_area.queue_draw()
 
     def force_reset(self):
@@ -133,9 +127,6 @@ class HandwriteOverlay:
         if self.debounce_id is not None:
             GLib.source_remove(self.debounce_id)
             self.debounce_id = None
-        if self.context is not None:
-            self.context.set_source_rgba(1, 1, 1, 1)
-            self.context.paint()
         self.drawing_area.queue_draw()
 
     def finish(self):
@@ -143,17 +134,30 @@ class HandwriteOverlay:
         self.clear()
         self.hide()
 
-    def on_size_allocate(self, widget, allocation):
-        if self.surface is None or self.surface.get_width() != allocation.width or self.surface.get_height() != allocation.height:
-            self.surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, allocation.width, allocation.height)
-            self.context = cairo.Context(self.surface)
-            self.context.set_source_rgba(1, 1, 1, 1)
-            self.context.paint()
-
     def on_draw(self, widget, cr):
-        if self.surface:
-            cr.set_source_surface(self.surface, 0, 0)
-            cr.paint()
+        # Draw white background
+        cr.set_source_rgba(1, 1, 1, 1)
+        cr.paint()
+
+        # Draw all completed strokes
+        for stroke in self.strokes:
+            self._draw_stroke(cr, stroke)
+
+        # Draw current stroke
+        if self.current_stroke:
+            self._draw_stroke(cr, self.current_stroke)
+
+    def _draw_stroke(self, cr, stroke):
+        if len(stroke) < 2:
+            return
+        cr.set_source_rgba(0, 0, 0, 0.8)
+        cr.set_line_width(LINE_WIDTH)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.move_to(stroke[0][0], stroke[0][1])
+        for point in stroke[1:]:
+            cr.line_to(point[0], point[1])
+        cr.stroke()
 
     def on_button_press(self, widget, event):
         if event.button != 1:
@@ -193,25 +197,8 @@ class HandwriteOverlay:
             pressure = 1.0
 
         self.current_stroke.append((event.x, event.y, pressure))
-        self.draw_last_segment()
-        return True
-
-    def draw_last_segment(self):
-        if self.context is None:
-            return
-        if len(self.current_stroke) < 2:
-            return
-        x0, y0, p0 = self.current_stroke[-2]
-        x1, y1, p1 = self.current_stroke[-1]
-
-        self.context.set_source_rgba(0, 0, 0, 0.8)
-        self.context.set_line_width(8.0)
-        self.context.set_line_cap(cairo.LINE_CAP_ROUND)
-        self.context.move_to(x0, y0)
-        self.context.line_to(x1, y1)
-        self.context.stroke()
-
         self.drawing_area.queue_draw()
+        return True
 
     def schedule_recognize(self):
         if self.debounce_id is not None:
@@ -301,10 +288,8 @@ class HandwriteDaemon:
     def recognize(self):
         if not self.overlay.strokes:
             return
-        if self.overlay.surface is None:
-            return
 
-        # Calculate bounding box of all strokes
+        # Collect all points
         all_points = []
         for stroke in self.overlay.strokes:
             all_points.extend([(p[0], p[1]) for p in stroke])
@@ -312,6 +297,7 @@ class HandwriteDaemon:
         if not all_points:
             return
 
+        # Calculate bounding box
         min_x = min(p[0] for p in all_points)
         min_y = min(p[1] for p in all_points)
         max_x = max(p[0] for p in all_points)
@@ -321,8 +307,8 @@ class HandwriteDaemon:
         padding = 40
         min_x = max(0, min_x - padding)
         min_y = max(0, min_y - padding)
-        max_x = min(self.overlay.surface.get_width(), max_x + padding)
-        max_y = min(self.overlay.surface.get_height(), max_y + padding)
+        max_x = max_x + padding
+        max_y = max_y + padding
 
         width = int(max_x - min_x)
         height = int(max_y - min_y)
@@ -330,28 +316,44 @@ class HandwriteDaemon:
         if width < 10 or height < 10:
             return
 
-        # Create cropped surface
-        cropped = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-        cropped_ctx = cairo.Context(cropped)
-        cropped_ctx.set_source_surface(self.overlay.surface, -min_x, -min_y)
-        cropped_ctx.paint()
-
         # Scale up 2x for better OCR
-        scaled = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * 2, height * 2)
-        scaled_ctx = cairo.Context(scaled)
-        scaled_ctx.scale(2, 2)
-        scaled_ctx.set_source_surface(cropped, 0, 0)
-        scaled_ctx.paint()
+        scale = 2
+        scaled_width = width * scale
+        scaled_height = height * scale
+
+        # Create surface and draw
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, scaled_width, scaled_height)
+        cr = cairo.Context(surface)
+
+        # White background
+        cr.set_source_rgba(1, 1, 1, 1)
+        cr.paint()
+
+        # Draw all strokes
+        cr.scale(scale, scale)
+        cr.translate(-min_x, -min_y)
+        cr.set_source_rgba(0, 0, 0, 0.8)
+        cr.set_line_width(LINE_WIDTH)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+
+        for stroke in self.overlay.strokes:
+            if len(stroke) < 2:
+                continue
+            cr.move_to(stroke[0][0], stroke[0][1])
+            for point in stroke[1:]:
+                cr.line_to(point[0], point[1])
+            cr.stroke()
 
         # Save to PNG
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-            scaled.write_to_png(f.name)
+            surface.write_to_png(f.name)
             png_path = f.name
 
         try:
-            # Run tesseract with PSM 7 (single text line) and LSTM engine
+            # Run tesseract
             result = subprocess.run(
-                ['tesseract', png_path, 'stdout', '-l', DEFAULT_LANGUAGE, '--psm', '7', '--oem', '1'],
+                ['tesseract', png_path, 'stdout', '-l', DEFAULT_LANGUAGE, '--psm', '7'],
                 capture_output=True, text=True, timeout=10
             )
             text = result.stdout.strip()
