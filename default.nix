@@ -55,6 +55,9 @@ let
       torch
       sentencepiece
       tiktoken
+      # protobuf is needed by the sentencepiece tokenizer that
+      # trocr-small-handwritten ships (it declares XLMRobertaTokenizer).
+      protobuf
     ]
   );
 

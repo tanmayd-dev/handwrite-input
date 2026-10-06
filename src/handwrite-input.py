@@ -29,7 +29,12 @@ gi.require_version('GtkLayerShell', '0.1')
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
-from transformers import RobertaTokenizer, ViTImageProcessor, VisionEncoderDecoderModel
+from transformers import (
+    RobertaTokenizer,
+    ViTImageProcessor,
+    VisionEncoderDecoderModel,
+    XLMRobertaTokenizer,
+)
 
 import handwrite_config
 import handwrite_inject
@@ -67,7 +72,6 @@ class HandwriteOverlay:
         # Options bar widgets (see build_toolbar), populated when shown.
         self.model_combo = None
         self.pause_combo = None
-        self.fast_check = None
         self.status_label = None
         self._syncing = False
 
@@ -151,10 +155,6 @@ class HandwriteOverlay:
         self.pause_combo.connect('changed', self.on_pause_changed)
         hbox.pack_start(self.pause_combo, False, False, 0)
 
-        self.fast_check = Gtk.CheckButton(label="Fast (int8)")
-        self.fast_check.connect('toggled', self.on_fast_toggled)
-        hbox.pack_start(self.fast_check, False, False, 0)
-
         vbox.pack_start(hbox, False, False, 0)
 
         self.window.add(vbox)
@@ -177,7 +177,6 @@ class HandwriteOverlay:
             if self.pause_combo.set_active_id(pause) is None:
                 self.pause_combo.append(pause, f'{pause} ms (custom)')
                 self.pause_combo.set_active_id(pause)
-            self.fast_check.set_active(bool(settings['quantise']))
             self.status_label.set_text(self.daemon.status)
         finally:
             self._syncing = False
@@ -195,11 +194,6 @@ class HandwriteOverlay:
         value = combo.get_active_id()
         if value:
             self.daemon.apply_settings({'debounce_ms': int(value)})
-
-    def on_fast_toggled(self, check):
-        if self._syncing:
-            return
-        self.daemon.apply_settings({'quantise': check.get_active()})
 
     def hide(self):
         if self.window is not None:
@@ -336,32 +330,37 @@ class HandwriteDaemon:
                 self._set_status(f'loading {short}…')
                 # Slow Roberta tokenizer — AutoTokenizer in transformers 5.x
                 # tries (and fails) to convert this to a fast tokenizer.
-                tokenizer = RobertaTokenizer.from_pretrained(model_id)
+                tokenizer = self._load_tokenizer(model_id)
                 image_processor = ViTImageProcessor.from_pretrained(model_id)
                 model = VisionEncoderDecoderModel.from_pretrained(model_id)
                 model.eval()
-                quantised = False
-                if self.settings['quantise']:
-                    try:
-                        import torch
-
-                        model = torch.quantization.quantize_dynamic(
-                            model, {torch.nn.Linear}, dtype=torch.qint8
-                        )
-                        quantised = True
-                    except Exception as exc:  # noqa: BLE001 - fp32 still works
-                        print(
-                            f'int8 quantisation failed, using fp32: {exc}',
-                            file=sys.stderr,
-                        )
                 self._trocr = (tokenizer, image_processor, model)
                 self._trocr_model = model_id
-                self._set_status(f'{short} {"int8" if quantised else "fp32"} ready')
+                self._set_status(f'{short} ready')
         return self._trocr
 
     def preload_model(self):
         """Warm the model in the background so the first write is not slow."""
         threading.Thread(target=self._preload_worker, daemon=True).start()
+
+    @staticmethod
+    def _load_tokenizer(model_id):
+        """Load the tokenizer flavour a checkpoint actually ships.
+
+        trocr-large/base-handwritten ship roberta files (vocab.json +
+        merges.txt); trocr-small-handwritten instead ships
+        sentencepiece.bpe.model and declares XLMRobertaTokenizer, which needs
+        `protobuf` in the environment.
+        """
+        try:
+            return RobertaTokenizer.from_pretrained(model_id)
+        except Exception as exc:  # noqa: BLE001 - try the other flavour
+            print(
+                f'Roberta tokenizer unavailable for {model_id} ({exc}); '
+                'trying XLMRobertaTokenizer',
+                file=sys.stderr,
+            )
+            return XLMRobertaTokenizer.from_pretrained(model_id)
 
     def _preload_worker(self):
         try:
@@ -384,7 +383,6 @@ class HandwriteDaemon:
     def apply_settings(self, updates):
         """Validate, persist and apply settings, reloading the model if needed."""
         previous_model = self.settings['model']
-        previous_quantise = self.settings['quantise']
         for key, value in updates.items():
             if key in handwrite_config.DEFAULTS:
                 self.settings[key] = handwrite_config.coerce(key, value)
@@ -392,10 +390,7 @@ class HandwriteDaemon:
             handwrite_config.save(self.settings)
         except OSError as exc:
             print(f'Could not save settings: {exc}', file=sys.stderr)
-        if (
-            self.settings['model'] != previous_model
-            or self.settings['quantise'] != previous_quantise
-        ):
+        if self.settings['model'] != previous_model:
             self.preload_model()
         GLib.idle_add(self.overlay.sync_toolbar)
         return self.settings

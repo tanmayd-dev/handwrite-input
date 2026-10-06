@@ -9,7 +9,7 @@ System-wide handwriting input for Wayland. Write with a pen/stylus and have your
 - Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-large-handwritten), a transformer model trained on the IAM handwriting dataset
 - Multi-line writing: the ink is split into text lines and each line is read on its own (TrOCR only understands one line at a time)
 - Incremental typing: ink is recognized and typed as you pause, and only new ink is read afterwards
-- Choice of TrOCR size (small/base/large) plus int8 quantisation, switchable from the overlay's options bar and applied without a restart
+- Choice of TrOCR size (small/base/large), switchable from the overlay's options bar and applied without a restart
 - Recognition runs off the GTK main loop, so the overlay stays responsive while the model works
 - Text insertion via `ydotool` (uinput) with automatic fallback to `wtype` (Wayland virtual keyboard)
 - Unix socket IPC for integration with window managers
@@ -74,11 +74,11 @@ hl.bind(mod .. " + CTRL + P", hl.dsp.exec_cmd("handwrite-input-client toggle"))
 
 ## Options
 
-The overlay's options bar (along the bottom) switches the model, the pause
-before recognition, and int8 quantisation. All three are saved to
-`~/.config/handwrite-input/config.json` and applied immediately — no rebuild,
-no restart. A model switch reloads the model in the background; the status
-label on the right says what it is doing.
+The overlay's options bar (along the bottom) switches the model and the pause
+before recognition. Both are saved to `~/.config/handwrite-input/config.json`
+and applied immediately — no rebuild, no restart. A model switch downloads (on
+first use) and loads the model in the background; the status label on the right
+says what it is doing.
 
 The same settings are available from the client, which is convenient for
 keybinds:
@@ -95,27 +95,40 @@ handwrite-input-client status
 |---|---|---|
 | `model` | `microsoft/trocr-base-handwritten` | TrOCR checkpoint (`small`/`base`/`large` shortcuts accepted) |
 | `debounce_ms` | `1200` | Pause after the last stroke before recognising |
-| `quantise` | `true` | int8 dynamic quantisation of the Linear layers |
 | `batch_lines` | `false` | Read all lines in one model call (measured slower) |
 | `injector` | `auto` | `ydotool`, `wtype`, or `auto` |
 | `line_width` | `15.0` | Stroke width used to render the ink |
 
 Set `HANDWRITE_CONFIG` to use a different settings file.
 
+Note that the checkpoints do not share a tokenizer flavour: `large` and `base`
+ship roberta files, while `small` ships a sentencepiece model and needs
+`protobuf` (already in the package).
+
 ### Speed
 
-TrOCR comes in three sizes: `small` (62M parameters), `base` (334M) and `large`
-(558M). Recognition happens on the CPU, so the model size dominates both the
-load time and the time per line. Measured on a five-line sample
-(homeserver-1, 6 threads):
+TrOCR comes in three sizes, and recognition is CPU-bound, so the checkpoint
+dominates both load time and time per line. Measured on a five-line sample
+(homeserver-1, 6 threads, `src/handwrite_ocr.py` line splitting):
 
-- `large`: 7.8 s to load, 7.7 s for the five lines
-- batching those lines into one call: 11.5 s — slower, because the processor
-  pads every line to the widest one in the batch
+- **`small`** (62M params): 0.9 s for the five lines (0.2 s/line), 0.9 GB peak
+- **`base`** (334M params): 6.0 s for the five lines (1.2 s/line), 2.9 GB peak
+- **`large`** (558M params): 7.7 s for the five lines (1.5 s/line), ~2.2 GB resident
 
-Recognition also runs on a worker thread, so the overlay keeps repainting and
-capturing strokes while the model works, and the model is loaded at daemon
-start rather than on the first write.
+Two levers were measured and rejected:
+
+- **Batching the lines into one model call** is *slower* (11.5 s vs 7.7 s with
+  `large`), because the processor pads every line to the widest one in the
+  batch.
+- **int8 dynamic quantisation** roughly doubles throughput but destroys the
+  output — `This is a longer test to see…` came back as `Tthis , is a teenager
+  treat to the streets of the streets…` — and quantising `large` was killed by
+  the kernel for running the box out of memory. It is deliberately not offered.
+
+Two things do help beyond the model choice: recognition runs on a worker thread
+(so the overlay keeps repainting and capturing strokes while the model works)
+and bands of ink much shorter than the typical line are treated as stray marks
+rather than read as a line, which avoids a whole inference pass per tick.
 
 ## Configuration
 

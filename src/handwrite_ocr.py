@@ -26,6 +26,11 @@ PADDING = 40
 MIN_LINE_INK = 200
 MIN_LINE_DENSITY = 0.004
 
+# Bands shorter than this fraction of the median band height are treated as
+# stray marks rather than text lines (only applied when several bands exist).
+# A stray tick otherwise costs a whole model pass to come back as junk ("o .").
+STRAY_BAND_RATIO = 0.4
+
 
 def build_ink_image(strokes, scale=SCALE, padding=PADDING, line_width=DEFAULT_LINE_WIDTH):
     """Render strokes as black-on-white and return a PIL image (or None).
@@ -107,6 +112,13 @@ def split_lines(image, gap_ratio=1 / 60, min_ink=MIN_LINE_INK, min_density=MIN_L
                 start = None
     if start is not None:
         bands.append((start, height - 1))
+
+    # Drop strays: with several bands, one much shorter than the rest is a tick
+    # or a dash, not a line of writing.
+    if len(bands) > 1:
+        heights = sorted(y1 - y0 for y0, y1 in bands)
+        median = heights[len(heights) // 2]
+        bands = [(y0, y1) for y0, y1 in bands if (y1 - y0) >= STRAY_BAND_RATIO * median]
 
     lines = []
     for y0, y1 in bands:

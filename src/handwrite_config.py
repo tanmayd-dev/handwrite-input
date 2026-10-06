@@ -18,9 +18,6 @@ DEFAULTS = {
     'model': 'microsoft/trocr-base-handwritten',
     # Pause in milliseconds after the last stroke before recognising.
     'debounce_ms': 1200,
-    # Dynamic int8 quantisation of the Linear layers: much faster on CPU,
-    # usually for a small accuracy cost.
-    'quantise': True,
     # Feed all lines of one recognition to the model in a single batch.
     # Off by default: measured on a five-line sample, batching was *slower*
     # than reading line by line (11.5s vs 7.7s with trocr-large) because the
