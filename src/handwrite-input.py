@@ -15,6 +15,7 @@ import sys
 import socket
 import subprocess
 import signal
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -334,9 +335,16 @@ class HandwriteDaemon:
             pass
 
         try:
+            started = time.time()
             tokenizer, image_processor, model = self._load_trocr()
             lines = handwrite_ocr.split_lines(image)
             text = handwrite_ocr.read_lines(lines, tokenizer, image_processor, model)
+            print(
+                f"OCR: {len(strokes)} stroke(s) -> image {image.size}, "
+                f"{len(lines)} line(s) {[line.size for line in lines]} "
+                f"in {time.time() - started:.1f}s: {text!r}",
+                file=sys.stderr,
+            )
             if text:
                 # Type via wtype
                 subprocess.run(['wtype', text], timeout=5)
