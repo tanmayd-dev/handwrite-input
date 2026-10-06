@@ -7,6 +7,8 @@ System-wide handwriting input for Wayland. Write with a pen/stylus and have your
 - Full-screen transparent overlay for handwriting input (gtk-layer-shell)
 - Pen/stylus support
 - Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-large-handwritten), a transformer model trained on the IAM handwriting dataset
+- Multi-line writing: the ink is split into text lines and each line is read on its own (TrOCR only understands one line at a time)
+- Incremental typing: ink is recognized and typed as you pause, and only new ink is read afterwards
 - Text insertion via `wtype` (Wayland-native)
 - Unix socket IPC for integration with window managers
 - NixOS module for easy installation
@@ -53,7 +55,7 @@ nix build .#default
 
 3. Write with your pen in the overlay.
 
-4. Recognition runs shortly after you stop writing (1500 ms after the last stroke); the text is typed into the focused application.
+4. Recognition runs shortly after you stop writing (1500 ms after the last stroke); the text is typed into the focused application. Once ink has been typed it is not read again, so you can keep writing and adding to the text.
 
 5. Hide the overlay:
    ```bash

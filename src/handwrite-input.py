@@ -14,9 +14,10 @@ import os
 import sys
 import socket
 import subprocess
-import tempfile
 import signal
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -25,11 +26,14 @@ gi.require_version('GtkLayerShell', '0.1')
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
-from PIL import Image
 from transformers import RobertaTokenizer, ViTImageProcessor, VisionEncoderDecoderModel
+
+import handwrite_ocr
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
+
+DEBUG_IMAGE_PATH = '/tmp/handwrite-debug.png'
 
 DEFAULT_DEBOUNCE_MS = 1500
 DEFAULT_LANGUAGE = 'en'
@@ -46,6 +50,9 @@ class HandwriteOverlay:
         self.current_stroke = []
         self.is_drawing = False
         self.debounce_id = None
+        # Strokes already sent for recognition; only the tail beyond this is
+        # new ink. Without it the debounce re-types everything on each pause.
+        self.consumed = 0
 
     def show(self):
         if self.window is not None:
@@ -121,12 +128,14 @@ class HandwriteOverlay:
         self.strokes = []
         self.current_stroke = []
         self.is_drawing = False
+        self.consumed = 0
         self.drawing_area.queue_draw()
 
     def force_reset(self):
         self.strokes = []
         self.current_stroke = []
         self.is_drawing = False
+        self.consumed = 0
         if self.debounce_id is not None:
             GLib.source_remove(self.debounce_id)
             self.debounce_id = None
@@ -310,85 +319,32 @@ class HandwriteDaemon:
         if not self.overlay.strokes:
             return
 
-        # Collect all points
-        all_points = []
-        for stroke in self.overlay.strokes:
-            all_points.extend([(p[0], p[1]) for p in stroke])
-
-        if not all_points:
+        strokes = self.overlay.strokes[self.overlay.consumed:]
+        if not strokes:
             return
 
-        # Calculate bounding box
-        min_x = min(p[0] for p in all_points)
-        min_y = min(p[1] for p in all_points)
-        max_x = max(p[0] for p in all_points)
-        max_y = max(p[1] for p in all_points)
-
-        # Add padding
-        padding = 40
-        min_x = max(0, min_x - padding)
-        min_y = max(0, min_y - padding)
-        max_x = max_x + padding
-        max_y = max_y + padding
-
-        width = int(max_x - min_x)
-        height = int(max_y - min_y)
-
-        if width < 10 or height < 10:
+        image = handwrite_ocr.build_ink_image(strokes, line_width=LINE_WIDTH)
+        if image is None:
             return
 
-        # Scale up 3x for better OCR
-        scale = 3
-        scaled_width = width * scale
-        scaled_height = height * scale
-
-        # Create surface and draw
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, scaled_width, scaled_height)
-        cr = cairo.Context(surface)
-
-        # White background
-        cr.set_source_rgba(1, 1, 1, 1)
-        cr.paint()
-
-        # Draw all strokes
-        cr.scale(scale, scale)
-        cr.translate(-min_x, -min_y)
-        cr.set_source_rgba(0, 0, 0, 0.8)
-        cr.set_line_width(LINE_WIDTH)
-        cr.set_line_cap(cairo.LINE_CAP_ROUND)
-        cr.set_line_join(cairo.LINE_JOIN_ROUND)
-
-        for stroke in self.overlay.strokes:
-            if len(stroke) < 2:
-                continue
-            cr.move_to(stroke[0][0], stroke[0][1])
-            for point in stroke[1:]:
-                cr.line_to(point[0], point[1])
-            cr.stroke()
-
-        # Save to PNG
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-            surface.write_to_png(f.name)
-            png_path = f.name
-
-        # Save debug copy
-        debug_path = '/tmp/handwrite-debug.png'
-        surface.write_to_png(debug_path)
+        # Keep the exact image handed to the model, for debugging.
+        try:
+            image.save(DEBUG_IMAGE_PATH)
+        except OSError:
+            pass
 
         try:
             tokenizer, image_processor, model = self._load_trocr()
-            image = Image.open(png_path).convert('RGB')
-            pixel_values = image_processor(images=image, return_tensors='pt').pixel_values
-            generated_ids = model.generate(pixel_values, max_new_tokens=64)
-            text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-
+            lines = handwrite_ocr.split_lines(image)
+            text = handwrite_ocr.read_lines(lines, tokenizer, image_processor, model)
             if text:
                 # Type via wtype
                 subprocess.run(['wtype', text], timeout=5)
+            # Only mark the ink as read once it has been typed, so a failed
+            # recognition is retried rather than silently dropped.
+            self.overlay.consumed = len(self.overlay.strokes)
         except Exception as e:
             print(f"Recognition error: {e}", file=sys.stderr)
-        finally:
-            os.unlink(png_path)
 
 
 def main():
