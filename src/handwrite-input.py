@@ -363,11 +363,32 @@ class HandwriteDaemon:
             return XLMRobertaTokenizer.from_pretrained(model_id)
 
     def _preload_worker(self):
+        target = self.settings['model']
         try:
             self._load_trocr()
         except Exception as exc:  # noqa: BLE001 - report, keep the daemon alive
             print(f'Model load error: {exc}', file=sys.stderr)
-            self._set_status('model failed to load')
+            # A failed switch must not leave the daemon with no model at all:
+            # go back to whichever one was working.
+            fallback = self._trocr_model
+            if not fallback or fallback == target:
+                self._set_status('model failed to load')
+                return
+            print(f'Model switch failed, reverting to {fallback}', file=sys.stderr)
+            self.settings['model'] = fallback
+            try:
+                handwrite_config.save(self.settings)
+            except OSError as save_exc:
+                print(f'Could not save settings: {save_exc}', file=sys.stderr)
+            GLib.idle_add(self.overlay.sync_toolbar)
+            try:
+                self._load_trocr()
+            except Exception as reload_exc:  # noqa: BLE001
+                print(f'Could not reload {fallback}: {reload_exc}', file=sys.stderr)
+                self._set_status('no model loaded')
+                return
+            short = fallback.rsplit('/', 1)[-1]
+            self._set_status(f'{short} restored (switch failed)')
 
     def _set_status(self, text):
         self.status = text
