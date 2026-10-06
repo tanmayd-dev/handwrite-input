@@ -9,6 +9,8 @@ System-wide handwriting input for Wayland. Write with a pen/stylus and have your
 - Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-large-handwritten), a transformer model trained on the IAM handwriting dataset
 - Multi-line writing: the ink is split into text lines and each line is read on its own (TrOCR only understands one line at a time)
 - Incremental typing: ink is recognized and typed as you pause, and only new ink is read afterwards
+- Choice of TrOCR size (small/base/large) plus int8 quantisation, switchable from the overlay's options bar and applied without a restart
+- Recognition runs off the GTK main loop, so the overlay stays responsive while the model works
 - Text insertion via `ydotool` (uinput) with automatic fallback to `wtype` (Wayland virtual keyboard)
 - Unix socket IPC for integration with window managers
 - NixOS module for easy installation
@@ -55,7 +57,7 @@ nix build .#default
 
 3. Write with your pen in the overlay.
 
-4. Recognition runs shortly after you stop writing (1500 ms after the last stroke); the text is typed into the focused application. Once ink has been typed it is not read again, so you can keep writing and adding to the text.
+4. Recognition runs shortly after you stop writing (1200 ms after the last stroke, adjustable); the text is typed into the focused application. Once ink has been typed it is not read again, so you can keep writing and adding to the text.
 
 5. Hide the overlay:
    ```bash
@@ -70,6 +72,51 @@ Add a keybind to your Hyprland config:
 hl.bind(mod .. " + CTRL + P", hl.dsp.exec_cmd("handwrite-input-client toggle"))
 ```
 
+## Options
+
+The overlay's options bar (along the bottom) switches the model, the pause
+before recognition, and int8 quantisation. All three are saved to
+`~/.config/handwrite-input/config.json` and applied immediately — no rebuild,
+no restart. A model switch reloads the model in the background; the status
+label on the right says what it is doing.
+
+The same settings are available from the client, which is convenient for
+keybinds:
+
+```bash
+handwrite-input-client settings           # current values
+handwrite-input-client models             # models on offer
+handwrite-input-client model small        # small | base | large, or a full id
+handwrite-input-client set debounce_ms 600
+handwrite-input-client status
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `model` | `microsoft/trocr-base-handwritten` | TrOCR checkpoint (`small`/`base`/`large` shortcuts accepted) |
+| `debounce_ms` | `1200` | Pause after the last stroke before recognising |
+| `quantise` | `true` | int8 dynamic quantisation of the Linear layers |
+| `batch_lines` | `false` | Read all lines in one model call (measured slower) |
+| `injector` | `auto` | `ydotool`, `wtype`, or `auto` |
+| `line_width` | `15.0` | Stroke width used to render the ink |
+
+Set `HANDWRITE_CONFIG` to use a different settings file.
+
+### Speed
+
+TrOCR comes in three sizes: `small` (62M parameters), `base` (334M) and `large`
+(558M). Recognition happens on the CPU, so the model size dominates both the
+load time and the time per line. Measured on a five-line sample
+(homeserver-1, 6 threads):
+
+- `large`: 7.8 s to load, 7.7 s for the five lines
+- batching those lines into one call: 11.5 s — slower, because the processor
+  pads every line to the widest one in the batch
+
+Recognition also runs on a worker thread, so the overlay keeps repainting and
+capturing strokes while the model works, and the model is loaded at daemon
+start rather than on the first write.
+
 ## Configuration
 
 The NixOS module provides the following options:
@@ -79,7 +126,8 @@ The NixOS module provides the following options:
 - `services.handwrite-input.users` — Sessions allowed to use the daemon; members are added to `programs.ydotool.group` (needs a new login)
 - `services.handwrite-input.injector` — `auto` (default), `ydotool`, or `wtype`
 
-The daemon's own defaults (debounce interval, stroke width) live in `src/handwrite-input.py`.
+Runtime settings are not NixOS options: they live in the JSON file above, so
+they can be changed from the overlay or the client without a rebuild.
 
 ## Dependencies
 

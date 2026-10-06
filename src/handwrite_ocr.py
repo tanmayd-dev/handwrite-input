@@ -142,14 +142,30 @@ def tidy_line(text):
     return text
 
 
-def read_lines(lines, tokenizer, image_processor, model, max_new_tokens=64):
-    """Read each line image with TrOCR and join the results with spaces."""
-    parts = []
-    for line in lines:
-        pixel_values = image_processor(images=line, return_tensors='pt').pixel_values
-        generated_ids = model.generate(pixel_values, max_new_tokens=max_new_tokens)
-        text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-        text = tidy_line(text)
-        if text:
-            parts.append(text)
-    return ' '.join(parts)
+def read_lines(lines, tokenizer, image_processor, model, max_new_tokens=64, batched=False):
+    """Read each line image with TrOCR and join the results with spaces.
+
+    With `batched`, all lines go through the model in a single call, which
+    removes per-call overhead on CPU. The image processor pads the batch to the
+    widest line, so a short line shares the batch width of the longest one.
+    """
+    import torch  # only needed for recognition, not for rendering/splitting
+
+    lines = list(lines)
+    if not lines:
+        return ''
+
+    with torch.inference_mode():
+        if batched:
+            pixel_values = image_processor(images=lines, return_tensors='pt').pixel_values
+            generated_ids = model.generate(pixel_values, max_new_tokens=max_new_tokens)
+            texts = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        else:
+            texts = []
+            for line in lines:
+                pixel_values = image_processor(images=line, return_tensors='pt').pixel_values
+                generated_ids = model.generate(pixel_values, max_new_tokens=max_new_tokens)
+                texts.append(tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0])
+
+    parts = [tidy_line(text.strip()) for text in texts]
+    return ' '.join(part for part in parts if part)
