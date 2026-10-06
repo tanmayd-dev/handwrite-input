@@ -9,7 +9,7 @@ System-wide handwriting input for Wayland. Write with a pen/stylus and have your
 - Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-large-handwritten), a transformer model trained on the IAM handwriting dataset
 - Multi-line writing: the ink is split into text lines and each line is read on its own (TrOCR only understands one line at a time)
 - Incremental typing: ink is recognized and typed as you pause, and only new ink is read afterwards
-- Text insertion via `wtype` (Wayland-native)
+- Text insertion via `ydotool` (uinput) with automatic fallback to `wtype` (Wayland virtual keyboard)
 - Unix socket IPC for integration with window managers
 - NixOS module for easy installation
 
@@ -76,6 +76,8 @@ The NixOS module provides the following options:
 
 - `services.handwrite-input.enable` — Enable the service
 - `services.handwrite-input.package` — The package to use
+- `services.handwrite-input.users` — Sessions allowed to use the daemon; members are added to `programs.ydotool.group` (needs a new login)
+- `services.handwrite-input.injector` — `auto` (default), `ydotool`, or `wtype`
 
 The daemon's own defaults (debounce interval, stroke width) live in `src/handwrite-input.py`.
 
@@ -83,9 +85,25 @@ The daemon's own defaults (debounce interval, stroke width) live in `src/handwri
 
 - Python 3 with GTK3, gtk-layer-shell, Cairo, and PyGObject
 - PyTorch and Transformers (pinned; see `default.nix` for why)
-- `wtype` (Wayland typing tool)
+- `ydotool` (preferred) or `wtype` for typing the recognised text
 
 The first recognition downloads the TrOCR weights (~2.2 GB) from Hugging Face into `~/.cache/huggingface` and caches them there.
+
+Enabling the service turns on `programs.ydotool` and `hardware.uinput` and adds
+`services.handwrite-input.users` to the ydotool group; group membership needs a
+fresh login to take effect.
+
+### Why ydotool rather than wtype alone
+
+`wtype` types through the Wayland virtual-keyboard protocol: it uploads a keymap
+covering only the characters in the text, sends the keycodes, then exits and lets
+the compositor restore the physical keymap. Clients that resolve that keymap late
+— XWayland buffers keycodes before translating them, and several toolkits do the
+same — translate them with the physical keymap instead, so recognised text
+arrives as digits and stray symbols (`This is a test` landing as `12345637`).
+Wayland-native terminals happen to resolve the keymap immediately, which is why
+the failure looks app-specific. `ydotool` writes to `/dev/uinput`, so the
+keystrokes are indistinguishable from an ordinary keyboard in every client.
 
 ## License
 

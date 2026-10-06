@@ -5,7 +5,7 @@ Handwrite Input — system-wide handwriting recognition for Wayland.
 A daemon that shows a transparent overlay where you can write with a pen.
 After a debounce period, the handwriting is recognized with TrOCR
 (microsoft/trocr-large-handwritten, ~2.2 GB, downloaded on first use)
-and typed into the focused application via wtype.
+and typed into the focused application via ydotool (uinput) or wtype.
 
 Uses gtk-layer-shell for proper Hyprland overlay support.
 """
@@ -29,6 +29,7 @@ from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 import cairo
 from transformers import RobertaTokenizer, ViTImageProcessor, VisionEncoderDecoderModel
 
+import handwrite_inject
 import handwrite_ocr
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
@@ -339,15 +340,17 @@ class HandwriteDaemon:
             tokenizer, image_processor, model = self._load_trocr()
             lines = handwrite_ocr.split_lines(image)
             text = handwrite_ocr.read_lines(lines, tokenizer, image_processor, model)
+            elapsed = time.time() - started
+            if text:
+                injector = handwrite_inject.inject_text(text) or 'FAILED'
+            else:
+                injector = 'nothing'
             print(
                 f"OCR: {len(strokes)} stroke(s) -> image {image.size}, "
                 f"{len(lines)} line(s) {[line.size for line in lines]} "
-                f"in {time.time() - started:.1f}s: {text!r}",
+                f"in {elapsed:.1f}s: {text!r} [{injector}]",
                 file=sys.stderr,
             )
-            if text:
-                # Type via wtype
-                subprocess.run(['wtype', text], timeout=5)
             # Only mark the ink as read once it has been typed, so a failed
             # recognition is retried rather than silently dropped.
             self.overlay.consumed = len(self.overlay.strokes)

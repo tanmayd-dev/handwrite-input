@@ -100,7 +100,12 @@ pkgs.runCommand "handwrite-input-0.1.0"
     # Main daemon
     makeWrapper ${pythonEnv}/bin/python $out/bin/handwrite-input \
       --add-flags "$src/handwrite-input.py" \
-      --prefix PATH : "${lib.makeBinPath [ pkgs.wtype ]}" \
+      --prefix PATH : "${
+        lib.makeBinPath [
+          pkgs.wtype
+          pkgs.ydotool
+        ]
+      }" \
       --set GI_TYPELIB_PATH "${typelibPath}"
 
     # Client

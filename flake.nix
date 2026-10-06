@@ -6,11 +6,18 @@
   };
 
   outputs = { self, nixpkgs }: {
-    nixosModules.handwrite-input = { config, pkgs, lib, ... }: {
-      imports = [ ./modules/handwrite-input.nix ];
-      services.handwrite-input.package = self.packages.x86_64-linux.default;
-    };
+    nixosModules.handwrite-input =
+      {
+        config,
+        pkgs,
+        lib,
+        ...
+      }:
+      {
+        imports = [ ./modules/handwrite-input.nix ];
+        services.handwrite-input.package = self.packages.x86_64-linux.default;
+      };
 
-    packages.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.callPackage ./default.nix {};
+    packages.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.callPackage ./default.nix { };
   };
 }
