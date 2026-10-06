@@ -3,10 +3,18 @@
 }:
 
 let
-  # transformers 5.x ignores use_fast=False and cannot load TrOCR's Roberta tokenizer.
-  # Pin 4.46.3 and relax deps so we keep nixpkgs tokenizers/huggingface-hub
-  # (do not pin tokenizers — its sdist layout breaks the Nix Rust vendor unpack).
-  transformers446 = pkgs.python3Packages.transformers.overridePythonAttrs (old: {
+  inherit (pkgs) lib;
+  py = pkgs.python3Packages;
+
+  # transformers 4.46.x predates huggingface-hub 1.0, which swapped its HTTP
+  # client from `requests` to `httpx`. httpx renamed the `allow_redirects`
+  # kwarg to `follow_redirects`, so transformers' `has_file()` blows up with:
+  #   TypeError: Client.head() got an unexpected keyword argument 'allow_redirects'
+  # surfaced as "Can't load the model for '<repo>'". Only *weight* loading takes
+  # that code path — tokenizer/config loading never does.
+  # Pinning hub <1.0 is not viable: nixpkgs' tokenizers declares hub 1.30 as a
+  # dependency, so a downgrade yields a duplicate-package closure.
+  transformers446 = py.transformers.overridePythonAttrs (old: {
     version = "4.46.3";
     src = pkgs.fetchPypi {
       pname = "transformers";
@@ -19,17 +27,25 @@ let
       "huggingface-hub"
       "safetensors"
     ];
-    propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [
-      pkgs.python3Packages.requests
-    ];
     postPatch = ''
+      # transformers 5.x pins these bounds in dependency_versions_table.py and
+      # enforces them at import time, so relaxing METADATA alone is not enough.
       substituteInPlace src/transformers/dependency_versions_table.py \
         --replace-fail 'tokenizers>=0.20,<0.21' 'tokenizers>=0.20' \
         --replace-fail 'huggingface-hub>=0.23.2,<1.0' 'huggingface-hub>=0.23.2'
+
+      # huggingface-hub >= 1.0 returns an httpx session; transformers 4.46 calls
+      # it with `requests` kwargs (`proxies`, `allow_redirects`) and catches
+      # `requests.exceptions.*`. Use a plain requests session for that one call.
+      substituteInPlace src/transformers/utils/hub.py \
+        --replace-fail 'get_session().head(' 'requests.Session().head('
     '';
+    # transformers 4.x imports `requests`; the 5.x expression no longer lists it.
+    dependencies = (old.dependencies or [ ]) ++ [ py.requests ];
     doCheck = false;
     pythonImportsCheck = [ "transformers" ];
   });
+
   pythonEnv = pkgs.python3.withPackages (
     ps: with ps; [
       pygobject3
@@ -41,7 +57,8 @@ let
       tiktoken
     ]
   );
-  typelibPath = pkgs.lib.makeSearchPath "lib/girepository-1.0" [
+
+  typelibPath = lib.makeSearchPath "lib/girepository-1.0" [
     pkgs.gtk3
     pkgs.glib
     pkgs.gdk-pixbuf
@@ -71,7 +88,7 @@ pkgs.runCommand "handwrite-input-0.1.0"
   {
     src = ./src;
     nativeBuildInputs = [ pkgs.makeWrapper ];
-    meta = with pkgs.lib; {
+    meta = with lib; {
       description = "System-wide handwriting input for Wayland";
       license = licenses.mit;
       platforms = platforms.linux;
@@ -83,7 +100,7 @@ pkgs.runCommand "handwrite-input-0.1.0"
     # Main daemon
     makeWrapper ${pythonEnv}/bin/python $out/bin/handwrite-input \
       --add-flags "$src/handwrite-input.py" \
-      --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.wtype ]}" \
+      --prefix PATH : "${lib.makeBinPath [ pkgs.wtype ]}" \
       --set GI_TYPELIB_PATH "${typelibPath}"
 
     # Client

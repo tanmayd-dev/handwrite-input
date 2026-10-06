@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, ... }:
 
 let
   cfg = config.services.handwrite-input;
@@ -12,35 +12,6 @@ in
       default = null;
       defaultText = lib.literalExpression "pkgs.handwrite-input";
       description = "The handwrite-input package to use.";
-    };
-
-    settings = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          language = lib.mkOption {
-            type = lib.types.str;
-            default = "eng";
-            description = "Tesseract language code (e.g., eng, deu, fra).";
-          };
-          debounceMs = lib.mkOption {
-            type = lib.types.int;
-            default = 1500;
-            description = "Milliseconds to wait after the last stroke before recognizing.";
-          };
-          windowWidth = lib.mkOption {
-            type = lib.types.int;
-            default = 600;
-            description = "Overlay window width in pixels.";
-          };
-          windowHeight = lib.mkOption {
-            type = lib.types.int;
-            default = 300;
-            description = "Overlay window height in pixels.";
-          };
-        };
-      };
-      default = { };
-      description = "Handwrite Input settings.";
     };
   };
 

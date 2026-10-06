@@ -4,9 +4,9 @@ System-wide handwriting input for Wayland. Write with a pen/stylus and have your
 
 ## Features
 
-- Transparent overlay window for handwriting input
-- Pen/stylus support with pressure sensitivity
-- Tesseract OCR for handwriting recognition
+- Full-screen transparent overlay for handwriting input (gtk-layer-shell)
+- Pen/stylus support
+- Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-large-handwritten), a transformer model trained on the IAM handwriting dataset
 - Text insertion via `wtype` (Wayland-native)
 - Unix socket IPC for integration with window managers
 - NixOS module for easy installation
@@ -27,7 +27,7 @@ Then import the module and enable the service:
 
 ```nix
 {
-  imports = [ handwrite-input.nixosModules.handwrite-input ];
+  imports = [ inputs.handwrite-input.nixosModules.handwrite-input ];
 
   services.handwrite-input.enable = true;
 }
@@ -51,9 +51,9 @@ nix build .#default
    handwrite-input-client show
    ```
 
-3. Write with your pen in the overlay window.
+3. Write with your pen in the overlay.
 
-4. After a short delay, your handwriting will be recognized and typed into the focused application.
+4. Recognition runs shortly after you stop writing (1500 ms after the last stroke); the text is typed into the focused application.
 
 5. Hide the overlay:
    ```bash
@@ -74,16 +74,16 @@ The NixOS module provides the following options:
 
 - `services.handwrite-input.enable` — Enable the service
 - `services.handwrite-input.package` — The package to use
-- `services.handwrite-input.settings.language` — Tesseract language code (default: `eng`)
-- `services.handwrite-input.settings.debounceMs` — Delay before recognition (default: `1500`)
-- `services.handwrite-input.settings.windowWidth` — Overlay width (default: `600`)
-- `services.handwrite-input.settings.windowHeight` — Overlay height (default: `300`)
+
+The daemon's own defaults (debounce interval, stroke width) live in `src/handwrite-input.py`.
 
 ## Dependencies
 
-- Python 3 with GTK3, Cairo, and PyGObject
-- Tesseract OCR
-- wtype (Wayland typing tool)
+- Python 3 with GTK3, gtk-layer-shell, Cairo, and PyGObject
+- PyTorch and Transformers (pinned; see `default.nix` for why)
+- `wtype` (Wayland typing tool)
+
+The first recognition downloads the TrOCR weights (~2.2 GB) from Hugging Face into `~/.cache/huggingface` and caches them there.
 
 ## License
 

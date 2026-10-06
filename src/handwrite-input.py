@@ -3,7 +3,8 @@
 Handwrite Input — system-wide handwriting recognition for Wayland.
 
 A daemon that shows a transparent overlay where you can write with a pen.
-After a debounce period, the handwriting is recognized via EasyOCR
+After a debounce period, the handwriting is recognized with TrOCR
+(microsoft/trocr-large-handwritten, ~2.2 GB, downloaded on first use)
 and typed into the focused application via wtype.
 
 Uses gtk-layer-shell for proper Hyprland overlay support.
@@ -378,7 +379,7 @@ class HandwriteDaemon:
             tokenizer, image_processor, model = self._load_trocr()
             image = Image.open(png_path).convert('RGB')
             pixel_values = image_processor(images=image, return_tensors='pt').pixel_values
-            generated_ids = model.generate(pixel_values)
+            generated_ids = model.generate(pixel_values, max_new_tokens=64)
             text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             if text:
