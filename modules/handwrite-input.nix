@@ -60,7 +60,14 @@ in
     systemd.user.services.handwrite-input = {
       description = "Handwrite Input daemon";
       wantedBy = [ "graphical-session.target" ];
-      environment.HANDWRITE_INJECTOR = cfg.injector;
+      environment = {
+        HANDWRITE_INJECTOR = cfg.injector;
+      }
+      // lib.optionalAttrs (config.environment.variables ? YDOTOOL_SOCKET) {
+        # Keep the daemon pointed at the socket ydotoold actually created,
+        # rather than making it guess when the variable reaches user services.
+        YDOTOOL_SOCKET = config.environment.variables.YDOTOOL_SOCKET;
+      };
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/handwrite-input";
         Restart = "on-failure";

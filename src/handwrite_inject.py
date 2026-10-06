@@ -28,20 +28,34 @@ import tempfile
 DEFAULT_INJECTOR = 'auto'
 VALID_INJECTORS = ('auto', 'ydotool', 'wtype')
 
+# Where ydotoold publishes its socket. YDOTOOL_SOCKET is honoured first when it
+# is set; /run/ydotoold/socket is where NixOS' programs.ydotool puts it.
+SOCKET_CANDIDATES = ('/run/ydotoold/socket', '/tmp/.ydotool_socket')
+
 
 def ydotool_socket():
-    """Path of the ydotoold socket (see ydotool(1) and YDOTOOL_SOCKET)."""
-    return os.environ.get('YDOTOOL_SOCKET') or f'/run/user/{os.getuid()}/.ydotool_socket'
+    """Path of a reachable ydotoold socket, or None if there is none.
+
+    The daemon deliberately does not depend on YDOTOOL_SOCKET being exported
+    into its unit: that variable only reaches user services when PAM has it,
+    which is easy to miss and fails silently.
+    """
+    runtime_dir = os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}'
+    candidates = [
+        os.environ.get('YDOTOOL_SOCKET'),
+        os.path.join(runtime_dir, '.ydotool_socket'),
+        *SOCKET_CANDIDATES,
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def preferred():
     """The configured injector, from HANDWRITE_INJECTOR."""
     value = os.environ.get('HANDWRITE_INJECTOR', DEFAULT_INJECTOR)
     return value if value in VALID_INJECTORS else DEFAULT_INJECTOR
-
-
-def ydotool_available():
-    return bool(shutil.which('ydotool')) and os.path.exists(ydotool_socket())
 
 
 def inject_text(text, preference=None):
@@ -51,9 +65,11 @@ def inject_text(text, preference=None):
     fall back rather than losing the recognised text.
     """
     preference = preference or preferred()
+    socket_path = ydotool_socket()
+    binary = shutil.which('ydotool')
 
     if preference in ('auto', 'ydotool'):
-        if ydotool_available():
+        if binary and socket_path:
             # --file sidesteps argument parsing of the recognised text.
             with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as handle:
                 handle.write(text)
@@ -61,6 +77,7 @@ def inject_text(text, preference=None):
             try:
                 proc = subprocess.run(
                     ['ydotool', 'type', '--file', path],
+                    env={**os.environ, 'YDOTOOL_SOCKET': socket_path},
                     timeout=30,
                     capture_output=True,
                     text=True,
@@ -76,11 +93,14 @@ def inject_text(text, preference=None):
                 )
             finally:
                 os.unlink(path)
-        elif preference == 'ydotool':
+        else:
             print(
-                'ydotool requested but not reachable (daemon or socket missing)',
+                'ydotool unavailable '
+                f"(binary: {binary or 'not found'}, socket: {socket_path or 'not found'})",
                 file=sys.stderr,
             )
+            if preference == 'ydotool':
+                return None
 
     if preference in ('auto', 'wtype'):
         try:
