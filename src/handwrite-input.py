@@ -351,16 +351,27 @@ class HandwriteDaemon:
         merges.txt); trocr-small-handwritten instead ships
         sentencepiece.bpe.model and declares XLMRobertaTokenizer, which needs
         `protobuf` in the environment.
+
+        transformers 5.x can load a degenerate roberta tokenizer from the
+        small checkpoint (a five-token vocab) instead of raising, which makes
+        every line decode to the empty string. Only accept a real vocab.
         """
         try:
-            return RobertaTokenizer.from_pretrained(model_id)
+            tokenizer = RobertaTokenizer.from_pretrained(model_id)
+            if tokenizer.vocab_size >= 1000:
+                return tokenizer
+            print(
+                f'Roberta tokenizer for {model_id} has a {tokenizer.vocab_size}-token vocab; '
+                'trying XLMRobertaTokenizer',
+                file=sys.stderr,
+            )
         except Exception as exc:  # noqa: BLE001 - try the other flavour
             print(
                 f'Roberta tokenizer unavailable for {model_id} ({exc}); '
                 'trying XLMRobertaTokenizer',
                 file=sys.stderr,
             )
-            return XLMRobertaTokenizer.from_pretrained(model_id)
+        return XLMRobertaTokenizer.from_pretrained(model_id)
 
     def _preload_worker(self):
         target = self.settings['model']
