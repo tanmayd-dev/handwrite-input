@@ -4,8 +4,8 @@ Handwrite Input — system-wide handwriting recognition for Wayland.
 
 A daemon that shows a transparent overlay where you can write with a pen.
 After a debounce period, the handwriting is recognized with TrOCR
-(microsoft/trocr-large-handwritten, ~2.2 GB, downloaded on first use)
-and typed into the focused application via ydotool (uinput) or wtype.
+(microsoft/trocr-small-handwritten, exported to ONNX, ~250 MB) and typed
+into the focused application via ydotool (uinput) or wtype.
 
 Uses gtk-layer-shell for proper Hyprland overlay support.
 """
@@ -29,16 +29,11 @@ gi.require_version('GtkLayerShell', '0.1')
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 import cairo
-from transformers import (
-    RobertaTokenizer,
-    ViTImageProcessor,
-    VisionEncoderDecoderModel,
-    XLMRobertaTokenizer,
-)
 
 import handwrite_config
 import handwrite_inject
 import handwrite_ocr
+import handwrite_onnx
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
@@ -317,7 +312,7 @@ class HandwriteDaemon:
     # --- model ------------------------------------------------------------
 
     def _load_trocr(self, model_id=None):
-        """Load (and cache) the tokenizer, image processor and model.
+        """Load (and cache) the ONNX recognition engine.
 
         Only ever called from worker threads: loading takes seconds and must
         not run on the GTK main loop.
@@ -328,13 +323,7 @@ class HandwriteDaemon:
                 self._trocr = None
                 short = model_id.rsplit('/', 1)[-1]
                 self._set_status(f'loading {short}…')
-                # Slow Roberta tokenizer — AutoTokenizer in transformers 5.x
-                # tries (and fails) to convert this to a fast tokenizer.
-                tokenizer = self._load_tokenizer(model_id)
-                image_processor = ViTImageProcessor.from_pretrained(model_id)
-                model = VisionEncoderDecoderModel.from_pretrained(model_id)
-                model.eval()
-                self._trocr = (tokenizer, image_processor, model)
+                self._trocr = handwrite_onnx.OnnxTrOCR(model_id)
                 self._trocr_model = model_id
                 self._set_status(f'{short} ready')
         return self._trocr
@@ -342,36 +331,6 @@ class HandwriteDaemon:
     def preload_model(self):
         """Warm the model in the background so the first write is not slow."""
         threading.Thread(target=self._preload_worker, daemon=True).start()
-
-    @staticmethod
-    def _load_tokenizer(model_id):
-        """Load the tokenizer flavour a checkpoint actually ships.
-
-        trocr-large/base-handwritten ship roberta files (vocab.json +
-        merges.txt); trocr-small-handwritten instead ships
-        sentencepiece.bpe.model and declares XLMRobertaTokenizer, which needs
-        `protobuf` in the environment.
-
-        transformers 5.x can load a degenerate roberta tokenizer from the
-        small checkpoint (a five-token vocab) instead of raising, which makes
-        every line decode to the empty string. Only accept a real vocab.
-        """
-        try:
-            tokenizer = RobertaTokenizer.from_pretrained(model_id)
-            if tokenizer.vocab_size >= 1000:
-                return tokenizer
-            print(
-                f'Roberta tokenizer for {model_id} has a {tokenizer.vocab_size}-token vocab; '
-                'trying XLMRobertaTokenizer',
-                file=sys.stderr,
-            )
-        except Exception as exc:  # noqa: BLE001 - try the other flavour
-            print(
-                f'Roberta tokenizer unavailable for {model_id} ({exc}); '
-                'trying XLMRobertaTokenizer',
-                file=sys.stderr,
-            )
-        return XLMRobertaTokenizer.from_pretrained(model_id)
 
     def _preload_worker(self):
         target = self.settings['model']
@@ -399,7 +358,7 @@ class HandwriteDaemon:
                 self._set_status('no model loaded')
                 return
             short = fallback.rsplit('/', 1)[-1]
-            self._set_status(f'{short} restored (switch failed)')
+            self._set_status(f'{short} ready')
 
     def _set_status(self, text):
         self.status = text
@@ -578,13 +537,10 @@ class HandwriteDaemon:
                 pass
 
             started = time.time()
-            tokenizer, image_processor, model = self._load_trocr()
+            model = self._load_trocr()
             lines = handwrite_ocr.split_lines(image)
-            text = handwrite_ocr.read_lines(
+            text = model.read_lines(
                 lines,
-                tokenizer,
-                image_processor,
-                model,
                 batched=bool(self.settings['batch_lines']),
             )
             elapsed = time.time() - started

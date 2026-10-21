@@ -14,14 +14,16 @@ from pathlib import Path
 DEFAULT_CONFIG_PATH = '~/.config/handwrite-input/config.json'
 
 DEFAULTS = {
-    # Model id passed to transformers, or one of the KNOWN_MODELS shortcuts.
-    'model': 'microsoft/trocr-base-handwritten',
+    # ONNX model id, or one of the KNOWN_MODELS shortcuts.
+    'model': 'microsoft/trocr-small-handwritten',
     # Pause in milliseconds after the last stroke before recognising.
     'debounce_ms': 1200,
     # Feed all lines of one recognition to the model in a single batch.
     # Off by default: measured on a five-line sample, batching was *slower*
     # than reading line by line (11.5s vs 7.7s with trocr-large) because the
-    # processor pads every line to the widest one in the batch.
+    # processor pads every line to the widest one in the batch. The ONNX
+    # engine currently accepts this for compatibility but always reads
+    # line by line.
     'batch_lines': False,
     # 'auto' | 'ydotool' | 'wtype' (see handwrite_inject).
     'injector': 'auto',
@@ -29,11 +31,10 @@ DEFAULTS = {
     'line_width': 15.0,
 }
 
-# Shortcuts accepted in the model setting, cheapest first.
+# Shortcuts accepted in the model setting. Only checkpoints exported with
+# tools/export_trocr_onnx.py can actually be loaded.
 KNOWN_MODELS = (
-    ('microsoft/trocr-small-handwritten', 'small (62M params, fastest)'),
-    ('microsoft/trocr-base-handwritten', 'base (334M params)'),
-    ('microsoft/trocr-large-handwritten', 'large (558M params, most accurate)'),
+    ('microsoft/trocr-small-handwritten', 'small (62M params, ONNX)'),
 )
 
 MODEL_ALIASES = {

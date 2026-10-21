@@ -1,0 +1,9 @@
+# Only needed to (re)export a checkpoint with tools/export_trocr_onnx.py.
+# The daemon itself runs on requirements-onnx.txt.
+torch
+transformers
+sentencepiece
+protobuf
+onnx
+numpy
+pillow

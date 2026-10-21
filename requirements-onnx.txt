@@ -1,0 +1,7 @@
+# Runtime dependencies for the ONNX build of handwrite-input.
+# GTK3, gtk-layer-shell and PyGObject come from the system packages (the venv
+# is created with --system-site-packages).
+numpy
+pillow
+onnxruntime
+tokenizers

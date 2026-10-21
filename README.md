@@ -6,10 +6,10 @@ System-wide handwriting input for Wayland. Write with a pen/stylus and have your
 
 - Full-screen transparent overlay for handwriting input (gtk-layer-shell)
 - Pen/stylus support
-- Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-large-handwritten), a transformer model trained on the IAM handwriting dataset
+- Handwriting recognition with [TrOCR](https://huggingface.co/microsoft/trocr-small-handwritten), a transformer model trained on the IAM handwriting dataset, running locally on onnxruntime
+- No PyTorch, Transformers or Hugging Face Hub access at runtime: the checkpoint is exported to ONNX once, then loaded from `~/.local/share/handwrite-input/models`
 - Multi-line writing: the ink is split into text lines and each line is read on its own (TrOCR only understands one line at a time)
 - Incremental typing: ink is recognized and typed as you pause, and only new ink is read afterwards
-- Choice of TrOCR size (small/base/large), switchable from the overlay's options bar and applied without a restart
 - Recognition runs off the GTK main loop, so the overlay stays responsive while the model works
 - Text insertion via `ydotool` (uinput) with automatic fallback to `wtype` (Wayland virtual keyboard)
 - Unix socket IPC for integration with window managers
@@ -39,9 +39,32 @@ Then import the module and enable the service:
 
 ### Manual
 
+The runtime needs Python 3 with GTK3, gtk-layer-shell and PyGObject from the
+system, plus the packages in `requirements-onnx.txt`:
+
 ```bash
-nix build .#default
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements-onnx.txt
 ```
+
+Export a checkpoint once (this is the only step that needs PyTorch and
+Transformers):
+
+```bash
+python3 -m venv /tmp/trocr-export
+/tmp/trocr-export/bin/pip install -r requirements-export.txt
+/tmp/trocr-export/bin/python tools/export_trocr_onnx.py
+```
+
+The exporter writes `encoder_model.onnx`, `decoder_model.onnx`,
+`tokenizer.json` and `onnx_config.json` to
+`~/.local/share/handwrite-input/models/trocr-small-onnx/`. Set
+`HANDWRITE_ONNX_MODEL` to load an export from a different directory.
+
+The `default.nix` and flake packaging still install the upstream PyTorch
+runtime; they have not been converted to the ONNX engine yet. On NixOS, use the
+manual setup above (or change the package to depend on `onnxruntime` and
+`tokenizers` and point `HANDWRITE_ONNX_MODEL` at the export).
 
 ## Usage
 
@@ -76,9 +99,8 @@ hl.bind(mod .. " + CTRL + P", hl.dsp.exec_cmd("handwrite-input-client toggle"))
 
 The overlay's options bar (along the bottom) switches the model and the pause
 before recognition. Both are saved to `~/.config/handwrite-input/config.json`
-and applied immediately — no rebuild, no restart. A model switch downloads (on
-first use) and loads the model in the background; the status label on the right
-says what it is doing.
+and applied immediately — no rebuild, no restart. A model switch loads the ONNX
+export in the background; the status label on the right says what it is doing.
 
 The same settings are available from the client, which is convenient for
 keybinds:
@@ -86,49 +108,53 @@ keybinds:
 ```bash
 handwrite-input-client settings           # current values
 handwrite-input-client models             # models on offer
-handwrite-input-client model small        # small | base | large, or a full id
+handwrite-input-client model small        # full id, or a shortcut for an installed export
 handwrite-input-client set debounce_ms 600
 handwrite-input-client status
 ```
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `model` | `microsoft/trocr-base-handwritten` | TrOCR checkpoint (`small`/`base`/`large` shortcuts accepted) |
+| `model` | `microsoft/trocr-small-handwritten` | ONNX TrOCR checkpoint (only exported checkpoints can be loaded) |
 | `debounce_ms` | `1200` | Pause after the last stroke before recognising |
-| `batch_lines` | `false` | Read all lines in one model call (measured slower) |
+| `batch_lines` | `false` | Read all lines in one model call (accepted for compatibility; the ONNX engine always reads line by line) |
 | `injector` | `auto` | `ydotool`, `wtype`, or `auto` |
 | `line_width` | `15.0` | Stroke width used to render the ink |
 
-Set `HANDWRITE_CONFIG` to use a different settings file.
+Set `HANDWRITE_CONFIG` to use a different settings file, and
+`HANDWRITE_ONNX_MODEL` to point at an ONNX export directory.
 
-Note that the checkpoints do not share a tokenizer flavour: `large` and `base`
-ship roberta files, while `small` ships a sentencepiece model and needs
-`protobuf` (already in the package).
+Only a `trocr-small` export is installed by default. The base and large
+checkpoints can be exported with the same tool; the shortcut names are mapped
+to full ids but the matching export directory must exist.
 
 ### Speed
 
-TrOCR comes in three sizes, and recognition is CPU-bound, so the checkpoint
-dominates both load time and time per line. Measured on a five-line sample
-(homeserver-1, 6 threads, `src/handwrite_ocr.py` line splitting):
-
-- **`small`** (62M params): 0.9 s for the five lines (0.2 s/line), 0.9 GB peak
-- **`base`** (334M params): 6.0 s for the five lines (1.2 s/line), 2.9 GB peak
-- **`large`** (558M params): 7.7 s for the five lines (1.5 s/line), ~2.2 GB resident
+Recognition is CPU-bound and TrOCR is a single-line model, so the checkpoint
+dominates both load time and time per line. The installed ONNX export
+(`trocr-small`, 62M params) loads in about 0.6 s and reads a line in roughly
+0.2–0.3 s on 6 threads; the daemon is ready about 0.8 s after launch, with no
+network access. Peak resident memory is around 1.1 GB with both ONNX sessions
+loaded.
 
 Two levers were measured and rejected:
 
-- **Batching the lines into one model call** is *slower* (11.5 s vs 7.7 s with
-  `large`), because the processor pads every line to the widest one in the
-  batch.
+- **Batching the lines into one model call** is *slower*, because the processor
+  pads every line to the widest one in the batch.
 - **int8 dynamic quantisation** roughly doubles throughput but destroys the
   output — `This is a longer test to see…` came back as `Tthis , is a teenager
-  treat to the streets of the streets…` — and quantising `large` was killed by
-  the kernel for running the box out of memory. It is deliberately not offered.
+  treat to the streets of the streets…` — and quantising a larger checkpoint was
+  killed by the kernel for running the box out of memory. It is deliberately not
+  offered.
 
 Two things do help beyond the model choice: recognition runs on a worker thread
 (so the overlay keeps repainting and capturing strokes while the model works)
 and bands of ink much shorter than the typical line are treated as stray marks
 rather than read as a line, which avoids a whole inference pass per tick.
+
+The decoder is exported without a key/value cache, matching the checkpoint's
+`use_cache=false` generation config. This keeps the ONNX graph simple; at this
+model size the extra decoder work is small compared with the encoder pass.
 
 ## Configuration
 
@@ -145,10 +171,15 @@ they can be changed from the overlay or the client without a rebuild.
 ## Dependencies
 
 - Python 3 with GTK3, gtk-layer-shell, Cairo, and PyGObject
-- PyTorch and Transformers (pinned; see `default.nix` for why)
+- `numpy`, `pillow`, `onnxruntime`, and `tokenizers` (see
+  `requirements-onnx.txt`)
 - `ydotool` (preferred) or `wtype` for typing the recognised text
 
-The first recognition downloads the TrOCR weights (~2.2 GB) from Hugging Face into `~/.cache/huggingface` and caches them there.
+The ONNX export itself is produced once by `tools/export_trocr_onnx.py`, which
+is the only part that needs PyTorch, Transformers, sentencepiece and `onnx`
+(`requirements-export.txt`). The daemon never contacts the Hugging Face Hub;
+the model is loaded from `~/.local/share/handwrite-input/models` (override with
+`HANDWRITE_ONNX_MODEL`).
 
 Enabling the service turns on `programs.ydotool` and `hardware.uinput` and adds
 `services.handwrite-input.users` to the ydotool group; group membership needs a
