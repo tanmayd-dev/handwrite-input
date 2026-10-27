@@ -4,60 +4,11 @@
 
 let
   inherit (pkgs) lib;
-  py = pkgs.python3Packages;
-
-  # transformers 4.46.x predates huggingface-hub 1.0, which swapped its HTTP
-  # client from `requests` to `httpx`. httpx renamed the `allow_redirects`
-  # kwarg to `follow_redirects`, so transformers' `has_file()` blows up with:
-  #   TypeError: Client.head() got an unexpected keyword argument 'allow_redirects'
-  # surfaced as "Can't load the model for '<repo>'". Only *weight* loading takes
-  # that code path — tokenizer/config loading never does.
-  # Pinning hub <1.0 is not viable: nixpkgs' tokenizers declares hub 1.30 as a
-  # dependency, so a downgrade yields a duplicate-package closure.
-  transformers446 = py.transformers.overridePythonAttrs (old: {
-    version = "4.46.3";
-    src = pkgs.fetchPypi {
-      pname = "transformers";
-      version = "4.46.3";
-      sha256 = "1k3jbwlk3v99nyskrgm9gjq5h8059dzq73pzmy13xqrzjjpb7r4f";
-    };
-    patches = [ ];
-    pythonRelaxDeps = [
-      "tokenizers"
-      "huggingface-hub"
-      "safetensors"
-    ];
-    postPatch = ''
-      # transformers 5.x pins these bounds in dependency_versions_table.py and
-      # enforces them at import time, so relaxing METADATA alone is not enough.
-      substituteInPlace src/transformers/dependency_versions_table.py \
-        --replace-fail 'tokenizers>=0.20,<0.21' 'tokenizers>=0.20' \
-        --replace-fail 'huggingface-hub>=0.23.2,<1.0' 'huggingface-hub>=0.23.2'
-
-      # huggingface-hub >= 1.0 returns an httpx session; transformers 4.46 calls
-      # it with `requests` kwargs (`proxies`, `allow_redirects`) and catches
-      # `requests.exceptions.*`. Use a plain requests session for that one call.
-      substituteInPlace src/transformers/utils/hub.py \
-        --replace-fail 'get_session().head(' 'requests.Session().head('
-    '';
-    # transformers 4.x imports `requests`; the 5.x expression no longer lists it.
-    dependencies = (old.dependencies or [ ]) ++ [ py.requests ];
-    doCheck = false;
-    pythonImportsCheck = [ "transformers" ];
-  });
 
   pythonEnv = pkgs.python3.withPackages (
     ps: with ps; [
       pygobject3
       pycairo
-      pillow
-      transformers446
-      torch
-      sentencepiece
-      tiktoken
-      # protobuf is needed by the sentencepiece tokenizer that
-      # trocr-small-handwritten ships (it declares XLMRobertaTokenizer).
-      protobuf
     ]
   );
 
