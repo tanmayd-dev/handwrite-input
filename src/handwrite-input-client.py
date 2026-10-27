@@ -6,6 +6,10 @@ import socket
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import handwrite_google
+
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
 
@@ -18,6 +22,10 @@ Settings (also in the overlay's options bar):
   settings           show the current settings
   set <key> <value>  change one setting, e.g. set debounce_ms 800
   status             what the daemon is doing right now
+
+Diagnostics:
+  --check            check that the recognition endpoint is reachable
+                     (status 1 when it is not; does not need the daemon)
 """
 
 
@@ -26,6 +34,9 @@ def main():
     if not args or args[0] in ('-h', '--help', 'help'):
         print(USAGE, end='')
         sys.exit(0 if args else 1)
+
+    if args[0] == '--check':
+        sys.exit(handwrite_google.check_cli('handwrite-input-client'))
 
     if not SOCKET_PATH.exists():
         print("Handwrite Input daemon is not running", file=sys.stderr)

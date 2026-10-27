@@ -45,6 +45,33 @@ Then import the module and enable the service:
 }
 ```
 
+### Arch Linux
+
+`PKGBUILD` (in the repository root) builds `handwrite-input-git` and installs
+the daemon, the client and a systemd **user** unit:
+
+```bash
+git clone https://github.com/tanmayd-dev/handwrite-input.git
+cd handwrite-input
+makepkg -si
+systemctl --user enable --now handwrite-input
+```
+
+The unit is `/usr/lib/systemd/user/handwrite-input.service` and is pulled in by
+`graphical-session.target`. Compositors that never reach that target (plain
+Hyprland without uwsm, for example) have to start it themselves, e.g.
+`exec-once = systemctl --user start handwrite-input` in `hyprland.conf`.
+
+Both injectors are optional dependencies: `ydotool` is preferred and needs its
+daemon (`sudo systemctl enable --now ydotoold`) plus access to `/dev/uinput`;
+`wtype` needs nothing beyond the compositor. If the overlay does not appear,
+the user manager may lack the session environment:
+
+```bash
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR
+systemctl --user restart handwrite-input
+```
+
 ### Manual
 
 The runtime needs Python 3 with GTK3, gtk-layer-shell, Cairo, and PyGObject
@@ -93,6 +120,13 @@ The example wrappers in `~/.local/bin` point at those two scripts.
    handwrite-input-client hide
    ```
 
+With the packaged install the daemon is a systemd user service:
+
+```bash
+systemctl --user enable --now handwrite-input
+systemctl --user status handwrite-input
+```
+
 `auto_recognize=false` is the default: pressing **Done** gives the recognizer
 the whole line as context. Enabling it sends each paused chunk separately,
 which is normally less accurate.
@@ -108,8 +142,16 @@ hl.bind(mod .. " + CTRL + P", hl.dsp.exec_cmd("handwrite-input-client toggle"))
 ## Options
 
 The overlay's options bar switches the pause before recognition. Settings are
-saved to `~/.config/handwrite-input/config.json` and applied immediately; no
-restart is needed.
+saved to `${XDG_CONFIG_HOME:-$HOME/.config}/handwrite-input/config.json` and
+applied immediately; no restart is needed. The file is optional: missing keys
+fall back to the defaults in the table below.
+
+Earlier builds hard-coded `~/.config/handwrite-input/config.json` and ignored
+`XDG_CONFIG_HOME`. When that variable is set and the XDG location has no
+settings file yet, the old file is copied there once at startup. The migration
+is non-destructive — the old file is left in place, untouched, so pointing
+`XDG_CONFIG_HOME` back or downgrading keeps working. `HANDWRITE_CONFIG` still
+selects a specific file, and nothing is migrated while it is set.
 
 The same settings are available from the client:
 
@@ -133,10 +175,24 @@ Set `HANDWRITE_CONFIG` to use a different settings file.
 ### Google Input Tools
 
 The backend posts the **raw pen strokes** for each line to the free,
-undocumented endpoint at `inputtools.google.com`. It does not upload a rendered
-image. The endpoint may rate-limit or disappear, and there is deliberately no
-local fallback: if a request fails, the daemon reports `recognition failed; ink
-kept`, leaves the ink in place, and you can press **Done** again.
+**undocumented** endpoint at `inputtools.google.com`. It does not upload a
+rendered image. This is not a supported Google API: it is rate-limited, may
+change without notice, and may disappear entirely. There is no local/offline
+recognizer, so without network access recognition is unavailable — if a request
+fails, the daemon reports `recognition failed; ink kept`, leaves the ink in
+place, and you can press **Done** again once connectivity is back.
+
+Check the endpoint before relying on it (needs neither a compositor nor the
+daemon):
+
+```bash
+handwrite-input --check
+handwrite-input-client --check
+```
+
+Both print the endpoint and its answer, and exit non-zero with a clear reason
+when the endpoint cannot be reached or answers in an unexpected shape. The
+check sends one tiny synthetic stroke, not any of your ink.
 
 Because Google returns several candidate readings, `lexicon` is used to pick
 the candidate containing the most configured terms. Whole-term matching also
@@ -179,8 +235,13 @@ they can be changed from the overlay or the client without a rebuild.
 ## Dependencies
 
 - Python 3 with GTK3, gtk-layer-shell, Cairo, and PyGObject
-- Network access to `inputtools.google.com`
+- Network access to `inputtools.google.com` (online-only; no offline fallback)
 - `ydotool` (preferred) or `wtype` for typing the recognized text
+- systemd, for the packaged user unit (the scripts also run by hand)
+
+`PKGBUILD` lists the Arch package names for the first two: `python`,
+`python-gobject`, `python-cairo`, `gtk3`, `gtk-layer-shell`; the injectors are
+`optdepends`.
 
 Enabling the NixOS service turns on `programs.ydotool` and `hardware.uinput` and
 adds `services.handwrite-input.users` to the ydotool group; group membership

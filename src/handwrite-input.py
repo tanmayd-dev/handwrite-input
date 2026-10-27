@@ -10,6 +10,7 @@ the recognized text is typed into the focused application via ydotool
 Uses gtk-layer-shell for proper Hyprland overlay support.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -496,10 +497,31 @@ class HandwriteDaemon:
         return False
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog='handwrite-input',
+        description=(
+            'System-wide handwriting input for Wayland. Recognition is done by '
+            'Google Input Tools, so it requires network access.'
+        ),
+    )
+    parser.add_argument(
+        '--check',
+        action='store_true',
+        help=(
+            'check that the Google Input Tools endpoint is reachable, print a '
+            'report and exit (status 1 when it is not)'
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        return handwrite_google.check_cli('handwrite-input')
+
     daemon = HandwriteDaemon()
     daemon.start()
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

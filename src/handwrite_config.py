@@ -4,14 +4,25 @@ Stored as JSON so the overlay's options menu, the `handwrite-input-client`
 socket commands and hand-editing all act on the same values. The file is
 optional: anything missing falls back to DEFAULTS.
 
+The location is `${XDG_CONFIG_HOME:-$HOME/.config}/handwrite-input/config.json`.
+Earlier builds hard-coded `~/.config/handwrite-input/config.json` and ignored
+XDG_CONFIG_HOME; load() copies such a file over once, without deleting it (see
+migrate()).
+
 Deliberately free of GTK/Wayland imports so it can be exercised headlessly.
 """
 
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
 
-DEFAULT_CONFIG_PATH = '~/.config/handwrite-input/config.json'
+APP_NAME = 'handwrite-input'
+
+# Where earlier builds always looked. Kept verbatim (~, not XDG) so migration
+# finds the file even when XDG_CONFIG_HOME points somewhere else.
+LEGACY_CONFIG_PATH = '~/.config/handwrite-input/config.json'
 
 DEFAULTS = {
     # Pause in milliseconds after the last stroke before recognising.
@@ -38,8 +49,56 @@ DEFAULTS = {
 }
 
 
+def config_home():
+    """XDG configuration root: $XDG_CONFIG_HOME, else ~/.config."""
+    value = os.environ.get('XDG_CONFIG_HOME', '').strip()
+    if value:
+        return Path(os.path.expanduser(value))
+    return Path(os.path.expanduser('~/.config'))
+
+
+def legacy_config_path():
+    """The pre-XDG settings file, with XDG_CONFIG_HOME ignored."""
+    return Path(os.path.expanduser(LEGACY_CONFIG_PATH))
+
+
 def config_path():
-    return Path(os.path.expanduser(os.environ.get('HANDWRITE_CONFIG', DEFAULT_CONFIG_PATH)))
+    """Settings file in use: HANDWRITE_CONFIG, else the XDG location."""
+    override = os.environ.get('HANDWRITE_CONFIG')
+    if override:
+        return Path(os.path.expanduser(override))
+    return config_home() / APP_NAME / 'config.json'
+
+
+def migrate():
+    """Copy a pre-XDG settings file to the XDG location, once.
+
+    Only does something when XDG_CONFIG_HOME moves the file (so the old and new
+    paths differ), the new file does not exist yet, and the old one does. The
+    copy is deliberately non-destructive: the old file is left untouched, so
+    pointing XDG_CONFIG_HOME back — or downgrading — keeps working.
+
+    An explicit HANDWRITE_CONFIG is never migrated into or out of. Returns the
+    path written when a copy was made, else None.
+    """
+    if os.environ.get('HANDWRITE_CONFIG'):
+        return None
+    target = config_path()
+    source = legacy_config_path()
+    if source == target or target.exists() or not source.exists():
+        return None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    except OSError as exc:
+        # Settings are optional; a failed migration must not stop the daemon.
+        print(f'Could not migrate settings from {source}: {exc}', file=sys.stderr)
+        return None
+    print(
+        f'Migrated settings from {source} to {target} (original kept)',
+        file=sys.stderr,
+    )
+    return target
 
 
 def coerce(key, value):
@@ -80,6 +139,7 @@ def coerce(key, value):
 def load():
     """Read the settings file, overlaying it on DEFAULTS."""
     settings = dict(DEFAULTS)
+    migrate()
     path = config_path()
     try:
         with open(path) as handle:

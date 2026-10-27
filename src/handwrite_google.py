@@ -12,6 +12,8 @@ recognition fallback.
 import json
 import math
 import re
+import sys
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,6 +21,15 @@ ENDPOINT = (
     'https://inputtools.google.com/request?itc=en-t-i0-handwrit&app=demopage'
 )
 REQUEST_TIMEOUT = 15
+
+# A tiny "v" sent by check_endpoint(): enough to exercise the real request
+# path (bbox, ink normalisation, JSON payload, response parsing) without
+# uploading anything the user wrote.
+CHECK_STROKES = [[(0.0, 0.0, 1.0), (12.0, 20.0, 1.0), (24.0, 0.0, 1.0)]]
+
+
+class CheckFailed(RuntimeError):
+    """The recognizer endpoint could not be reached or answered unusably."""
 
 
 def _points(stroke):
@@ -170,7 +181,7 @@ def _normalise_terms(text, lexicon):
     return text
 
 
-def _request_group(strokes, language='en'):
+def _request_group(strokes, language='en', timeout=REQUEST_TIMEOUT):
     x0, y0, x1, y1 = bbox(strokes)
     width = max(1, int(math.ceil(x1 - x0 + 20)))
     height = max(1, int(math.ceil(y1 - y0 + 20)))
@@ -217,7 +228,7 @@ def _request_group(strokes, language='en'):
         data=json.dumps(payload).encode(),
         headers={'Content-Type': 'application/json'},
     )
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         result = json.loads(response.read().decode())
 
     if not isinstance(result, list) or len(result) < 2 or result[0] != 'SUCCESS':
@@ -281,3 +292,48 @@ def recognize_groups(groups, lexicon='', path_terms='', language='en'):
             if text:
                 parts.append(text)
     return ' '.join(parts), len(groups)
+
+
+def check_endpoint(timeout=REQUEST_TIMEOUT):
+    """Probe the recognizer with a tiny stroke; return its candidates.
+
+    Raises :class:`CheckFailed` with a message that can be shown to the user
+    when the endpoint is unreachable, rejects the request, or stops answering
+    in the shape the recognizer expects.
+    """
+    try:
+        return _request_group(CHECK_STROKES, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        raise CheckFailed(f'HTTP {exc.code} {exc.reason} from {ENDPOINT}') from exc
+    except urllib.error.URLError as exc:
+        raise CheckFailed(f'cannot reach {ENDPOINT}: {exc.reason}') from exc
+    except (OSError, ValueError) as exc:
+        # Timeouts, resets and unparseable bodies all land here.
+        raise CheckFailed(f'cannot reach {ENDPOINT}: {exc}') from exc
+    except RuntimeError as exc:
+        raise CheckFailed(str(exc)) from exc
+
+
+def check_cli(program='handwrite-input', timeout=REQUEST_TIMEOUT):
+    """Print an endpoint report; return a process exit code (0 = usable)."""
+    print(f'{program}: checking the recognition endpoint')
+    print(f'  endpoint: {ENDPOINT}')
+    try:
+        candidates = check_endpoint(timeout=timeout)
+    except CheckFailed as exc:
+        print('  result:   FAILED')
+        print(f'  reason:   {exc}')
+        print(
+            'Google Input Tools is the only recognizer; there is no offline '
+            'fallback, so handwriting will not be recognized until the '
+            'endpoint is reachable again.',
+            file=sys.stderr,
+        )
+        return 1
+    sample = candidates[0] if candidates else '(no candidates)'
+    print(f'  result:   reachable ({len(candidates)} candidate(s), e.g. {sample!r})')
+    print(
+        '  note:     undocumented and rate-limited; it may change or disappear '
+        'without notice, and only works online.'
+    )
+    return 0
