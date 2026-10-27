@@ -16,9 +16,6 @@ Overlay:
 
 Settings (also in the overlay's options bar):
   settings           show the current settings
-  models             list the models offered
-  model              show the model in use
-  model <id|alias>   switch model: small | base | large, or a full model id
   set <key> <value>  change one setting, e.g. set debounce_ms 800
   status             what the daemon is doing right now
 """

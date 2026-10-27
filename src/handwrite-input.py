@@ -3,9 +3,9 @@
 Handwrite Input — system-wide handwriting recognition for Wayland.
 
 A daemon that shows a transparent overlay where you can write with a pen.
-After a debounce period, the handwriting is recognized with TrOCR
-(microsoft/trocr-small-handwritten, exported to ONNX, ~250 MB) and typed
-into the focused application via ydotool (uinput) or wtype.
+When the overlay is finished, the strokes are sent to Google Input Tools and
+the recognized text is typed into the focused application via ydotool
+(uinput) or wtype.
 
 Uses gtk-layer-shell for proper Hyprland overlay support.
 """
@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import socket
-import subprocess
 import signal
 import threading
 import time
@@ -31,21 +30,14 @@ from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 import cairo
 
 import handwrite_config
+import handwrite_google
 import handwrite_inject
-import handwrite_ocr
-import handwrite_onnx
 
 SOCKET_DIR = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
 SOCKET_PATH = SOCKET_DIR / 'handwrite-input.sock'
 
-DEBUG_IMAGE_PATH = '/tmp/handwrite-debug.png'
-
 # Pause choices offered in the overlay's options bar.
 PAUSE_CHOICES = (400, 800, 1200, 2000, 3000)
-
-DEFAULT_DEBOUNCE_MS = 1500
-DEFAULT_LANGUAGE = 'en'
-LINE_WIDTH = 15.0
 
 
 class HandwriteOverlay:
@@ -65,14 +57,17 @@ class HandwriteOverlay:
         # worker thread cannot mark ink as read that no longer exists.
         self.generation = 0
         # Options bar widgets (see build_toolbar), populated when shown.
-        self.model_combo = None
         self.pause_combo = None
         self.status_label = None
         self._syncing = False
 
     def show(self):
         if self.window is not None:
-            self.force_reset()
+            # Keep ink from a failed recognition so Done can be retried. After
+            # a successful recognition all ink has been consumed and the next
+            # show starts with a clean canvas.
+            if self.consumed >= len(self.strokes):
+                self.force_reset()
             self.window.show_all()
             return
 
@@ -136,13 +131,6 @@ class HandwriteOverlay:
 
         hbox.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 6)
 
-        hbox.pack_start(Gtk.Label(label="Model:"), False, False, 0)
-        self.model_combo = Gtk.ComboBoxText()
-        for model_id, label in handwrite_config.KNOWN_MODELS:
-            self.model_combo.append(model_id, label)
-        self.model_combo.connect('changed', self.on_model_changed)
-        hbox.pack_start(self.model_combo, False, False, 0)
-
         hbox.pack_start(Gtk.Label(label="Pause:"), False, False, 0)
         self.pause_combo = Gtk.ComboBoxText()
         for pause in PAUSE_CHOICES:
@@ -159,15 +147,11 @@ class HandwriteOverlay:
 
     def sync_toolbar(self):
         """Point the options bar at the current settings."""
-        if self.model_combo is None:
+        if self.pause_combo is None:
             return
         settings = self.daemon.settings
         self._syncing = True
         try:
-            model = settings['model']
-            if self.model_combo.set_active_id(model) is None:
-                self.model_combo.append(model, f'{model} (custom)')
-                self.model_combo.set_active_id(model)
             pause = str(settings['debounce_ms'])
             if self.pause_combo.set_active_id(pause) is None:
                 self.pause_combo.append(pause, f'{pause} ms (custom)')
@@ -175,13 +159,6 @@ class HandwriteOverlay:
             self.status_label.set_text(self.daemon.status)
         finally:
             self._syncing = False
-
-    def on_model_changed(self, combo):
-        if self._syncing:
-            return
-        model = combo.get_active_id()
-        if model and model != self.daemon.settings['model']:
-            self.daemon.apply_settings({'model': model})
 
     def on_pause_changed(self, combo):
         if self._syncing:
@@ -214,9 +191,12 @@ class HandwriteOverlay:
         self.drawing_area.queue_draw()
 
     def finish(self):
+        # Do not clear here: recognition runs in the background. The worker
+        # marks the ink consumed on success; on failure the ink stays so the
+        # user can show the overlay and press Done again.
         self.daemon.recognize()
-        self.clear()
         self.hide()
+        self.daemon.visible = False
 
     def on_draw(self, widget, cr):
         # Draw white background
@@ -285,6 +265,8 @@ class HandwriteOverlay:
         return True
 
     def schedule_recognize(self):
+        if not self.daemon.settings['auto_recognize']:
+            return
         if self.debounce_id is not None:
             GLib.source_remove(self.debounce_id)
         self.debounce_id = GLib.timeout_add(self.daemon.settings['debounce_ms'], self.on_debounce)
@@ -304,61 +286,7 @@ class HandwriteDaemon:
         self.sock = None
         self.visible = False
         self.status = 'idle'
-        self._trocr = None
-        self._trocr_model = None
-        self._lock = threading.Lock()
         self._busy = False
-
-    # --- model ------------------------------------------------------------
-
-    def _load_trocr(self, model_id=None):
-        """Load (and cache) the ONNX recognition engine.
-
-        Only ever called from worker threads: loading takes seconds and must
-        not run on the GTK main loop.
-        """
-        model_id = model_id or self.settings['model']
-        with self._lock:
-            if self._trocr is None or self._trocr_model != model_id:
-                self._trocr = None
-                short = model_id.rsplit('/', 1)[-1]
-                self._set_status(f'loading {short}…')
-                self._trocr = handwrite_onnx.OnnxTrOCR(model_id)
-                self._trocr_model = model_id
-                self._set_status(f'{short} ready')
-        return self._trocr
-
-    def preload_model(self):
-        """Warm the model in the background so the first write is not slow."""
-        threading.Thread(target=self._preload_worker, daemon=True).start()
-
-    def _preload_worker(self):
-        target = self.settings['model']
-        try:
-            self._load_trocr()
-        except Exception as exc:  # noqa: BLE001 - report, keep the daemon alive
-            print(f'Model load error: {exc}', file=sys.stderr)
-            # A failed switch must not leave the daemon with no model at all:
-            # go back to whichever one was working.
-            fallback = self._trocr_model
-            if not fallback or fallback == target:
-                self._set_status('model failed to load')
-                return
-            print(f'Model switch failed, reverting to {fallback}', file=sys.stderr)
-            self.settings['model'] = fallback
-            try:
-                handwrite_config.save(self.settings)
-            except OSError as save_exc:
-                print(f'Could not save settings: {save_exc}', file=sys.stderr)
-            GLib.idle_add(self.overlay.sync_toolbar)
-            try:
-                self._load_trocr()
-            except Exception as reload_exc:  # noqa: BLE001
-                print(f'Could not reload {fallback}: {reload_exc}', file=sys.stderr)
-                self._set_status('no model loaded')
-                return
-            short = fallback.rsplit('/', 1)[-1]
-            self._set_status(f'{short} ready')
 
     def _set_status(self, text):
         self.status = text
@@ -372,8 +300,7 @@ class HandwriteDaemon:
     # --- settings ---------------------------------------------------------
 
     def apply_settings(self, updates):
-        """Validate, persist and apply settings, reloading the model if needed."""
-        previous_model = self.settings['model']
+        """Validate, persist and apply settings."""
         for key, value in updates.items():
             if key in handwrite_config.DEFAULTS:
                 self.settings[key] = handwrite_config.coerce(key, value)
@@ -381,8 +308,6 @@ class HandwriteDaemon:
             handwrite_config.save(self.settings)
         except OSError as exc:
             print(f'Could not save settings: {exc}', file=sys.stderr)
-        if self.settings['model'] != previous_model:
-            self.preload_model()
         GLib.idle_add(self.overlay.sync_toolbar)
         return self.settings
 
@@ -410,9 +335,7 @@ class HandwriteDaemon:
         # Handle SIGTERM
         signal.signal(signal.SIGTERM, self.on_signal)
 
-        # Warm the model now: the first write would otherwise wait for it.
         print(f'Settings: {handwrite_config.config_path()}', file=sys.stderr)
-        self.preload_model()
 
         Gtk.main()
 
@@ -464,17 +387,6 @@ class HandwriteDaemon:
             return f'{self.status}\n'
         elif name == 'settings':
             return json.dumps(self.settings, indent=2, sort_keys=True) + '\n'
-        elif name == 'models':
-            lines = [
-                f'{model_id}\t{label}' for model_id, label in handwrite_config.KNOWN_MODELS
-            ]
-            return '\n'.join(lines) + '\n'
-        elif name == 'model':
-            if not rest:
-                return f'{self.settings["model"]}\n'
-            if rest == 'list':
-                return self.handle_command('models')
-            return self.set_setting('model', rest)
         elif name == 'set':
             key, _, value = rest.partition(' ')
             if not key or not value:
@@ -495,7 +407,13 @@ class HandwriteDaemon:
         self.visible = True
 
     def hide(self):
-        self.overlay.hide()
+        # Hiding is also how the overlay finishes: commit any ink that has not
+        # been recognised yet instead of silently discarding it. Use `clear`
+        # first if you want to cancel.
+        if self.overlay.strokes:
+            self.overlay.finish()
+        else:
+            self.overlay.hide()
         self.visible = False
 
     def recognize(self):
@@ -512,6 +430,16 @@ class HandwriteDaemon:
         if not strokes:
             return
 
+        # Optional local dump for debugging line grouping and for one-off
+        # comparisons with online handwriting engines. Nothing is uploaded
+        # unless a separate tool reads this file.
+        if os.environ.get('HANDWRITE_DUMP_STROKES'):
+            try:
+                with open('/tmp/handwrite-strokes.json', 'w') as dump:
+                    json.dump(strokes, dump)
+            except OSError:
+                pass
+
         total = len(self.overlay.strokes)
         generation = self.overlay.generation
         self._busy = True
@@ -524,51 +452,42 @@ class HandwriteDaemon:
     def _recognize_worker(self, strokes, total, generation):
         advanced = False
         try:
-            image = handwrite_ocr.build_ink_image(
-                strokes, line_width=self.settings['line_width']
-            )
-            if image is None:
-                return
-
-            # Keep the exact image handed to the model, for debugging.
-            try:
-                image.save(DEBUG_IMAGE_PATH)
-            except OSError:
-                pass
-
             started = time.time()
-            model = self._load_trocr()
-            lines = handwrite_ocr.split_lines(image)
-            text = model.read_lines(
-                lines,
-                batched=bool(self.settings['batch_lines']),
+            groups = handwrite_google.group_lines(strokes)
+            text, line_count = handwrite_google.recognize_groups(
+                groups,
+                lexicon=self.settings.get('lexicon', ''),
+                path_terms=self.settings.get('path_terms', ''),
             )
             elapsed = time.time() - started
+
             if text:
                 injector = handwrite_inject.inject_text(text, self.settings['injector'])
                 injector = injector or 'FAILED'
             else:
                 injector = 'nothing'
             print(
-                f"OCR: {len(strokes)} stroke(s) -> image {image.size}, "
-                f"{len(lines)} line(s) {[line.size for line in lines]} "
+                f"OCR: {len(strokes)} stroke(s), {line_count} line(s) "
                 f"in {elapsed:.1f}s: {text!r} [{injector}]",
                 file=sys.stderr,
             )
-            self._set_status(f'{len(lines)} line(s) in {elapsed:.1f}s')
+            self._set_status(f'{line_count} line(s) in {elapsed:.1f}s')
+
             # Only mark the ink as read once it has been typed, so a failed
             # recognition is retried rather than silently dropped — and only
             # while that ink still exists (the overlay may have been cleared).
-            if generation == self.overlay.generation:
+            if text and generation == self.overlay.generation:
                 self.overlay.consumed = max(self.overlay.consumed, total)
                 advanced = True
         except Exception as e:
+            # Keep the ink on failure: the online endpoint may be temporarily
+            # unreachable, and there is deliberately no local fallback.
             print(f"Recognition error: {e}", file=sys.stderr)
-            self._set_status('recognition failed')
+            self._set_status('recognition failed; ink kept')
         finally:
             self._busy = False
-            # Ink written while the model was busy was skipped by the debounce;
-            # pick it up now rather than waiting for the next stroke.
+            # Ink written while the recognizer was busy was skipped by the
+            # debounce; pick it up now rather than waiting for the next stroke.
             if advanced and self.overlay.consumed < len(self.overlay.strokes):
                 GLib.timeout_add(200, self._recognize_again)
 

@@ -14,44 +14,32 @@ from pathlib import Path
 DEFAULT_CONFIG_PATH = '~/.config/handwrite-input/config.json'
 
 DEFAULTS = {
-    # ONNX model id, or one of the KNOWN_MODELS shortcuts.
-    'model': 'microsoft/trocr-small-handwritten',
     # Pause in milliseconds after the last stroke before recognising.
     'debounce_ms': 1200,
-    # Feed all lines of one recognition to the model in a single batch.
-    # Off by default: measured on a five-line sample, batching was *slower*
-    # than reading line by line (11.5s vs 7.7s with trocr-large) because the
-    # processor pads every line to the widest one in the batch. The ONNX
-    # engine currently accepts this for compatibility but always reads
-    # line by line.
-    'batch_lines': False,
     # 'auto' | 'ydotool' | 'wtype' (see handwrite_inject).
     'injector': 'auto',
-    # Pen stroke width used when rendering the ink for the model.
+    # Optional comma-separated technical vocabulary used to choose among
+    # Google's alternative readings. Empty means always take its first
+    # candidate. Example: waybar,dwm,dwl,config,src
+    'lexicon': '',
+    # Optional path corrections applied after recognition, as
+    # source=replacement pairs. Only matches directly after "in". Useful when
+    # handwriting a leading dot is not returned by the recogniser:
+    # config=~/.config,local/src/dwl=~/.local/src/dwl
+    'path_terms': '',
+    # Recognise automatically after the debounce pause. Off by default: the
+    # recogniser works on whole lines, so typing each paused chunk separately
+    # loses context and turns a sentence into fragments. With this off, write
+    # the whole prompt and press Done (or hide the overlay) to recognise it
+    # once.
+    'auto_recognize': False,
+    # Pen stroke width used when drawing the overlay.
     'line_width': 15.0,
-}
-
-# Shortcuts accepted in the model setting. Only checkpoints exported with
-# tools/export_trocr_onnx.py can actually be loaded.
-KNOWN_MODELS = (
-    ('microsoft/trocr-small-handwritten', 'small (62M params, ONNX)'),
-)
-
-MODEL_ALIASES = {
-    'small': 'microsoft/trocr-small-handwritten',
-    'base': 'microsoft/trocr-base-handwritten',
-    'large': 'microsoft/trocr-large-handwritten',
 }
 
 
 def config_path():
     return Path(os.path.expanduser(os.environ.get('HANDWRITE_CONFIG', DEFAULT_CONFIG_PATH)))
-
-
-def resolve_model(value):
-    """Turn a shortcut ('base') or a model id into a model id."""
-    value = str(value).strip()
-    return MODEL_ALIASES.get(value.lower(), value)
 
 
 def coerce(key, value):
@@ -78,9 +66,14 @@ def coerce(key, value):
     if key == 'injector':
         text = str(value).strip().lower()
         return text if text in ('auto', 'ydotool', 'wtype') else default
-    if key == 'model':
-        text = str(value).strip()
-        return resolve_model(text) if text else default
+    if key == 'lexicon':
+        if isinstance(value, (list, tuple)):
+            return ','.join(str(term).strip() for term in value if str(term).strip())
+        return str(value).strip()
+    if key == 'path_terms':
+        if isinstance(value, (list, tuple)):
+            return ','.join(str(term).strip() for term in value if str(term).strip())
+        return str(value).strip()
     return value
 
 
